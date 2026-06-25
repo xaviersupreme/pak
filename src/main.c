@@ -7,12 +7,26 @@
 static void usage(FILE *out)
 {
     fprintf(out, "usage:\n");
-    fprintf(out, "  pak [--v|--verbose] make [--paths] [--compress] <archive.pak> <files...>\n");
-    fprintf(out, "  pak [--v|--verbose] list [--long] <archive.pak>\n");
-    fprintf(out, "  pak [--v|--verbose] extract [-C dir] [--overwrite|--skip-existing] <archive.pak> [files...]\n");
+    fprintf(out, "  pak make [options] <archive.pak> <files...>\n");
+    fprintf(out, "  pak list [options] <archive.pak>\n");
+    fprintf(out, "  pak extract [options] <archive.pak> [files...]\n");
     fprintf(out, "  pak cat <archive.pak> <file>\n");
-    fprintf(out, "  pak [--v|--verbose] info <archive.pak>\n");
-    fprintf(out, "  pak [--v|--verbose] verify|test <archive.pak>\n");
+    fprintf(out, "  pak info <archive.pak>\n");
+    fprintf(out, "  pak verify|test <archive.pak>\n");
+    fprintf(out, "\noptions:\n");
+    fprintf(out, "  -v, --v, --verbose       show progress\n");
+    fprintf(out, "  --compress               compress entries when useful\n");
+    fprintf(out, "  --paths                  keep relative paths\n");
+    fprintf(out, "  --long                   detailed list output\n");
+    fprintf(out, "  -C <dir>, -C<dir>        extract into directory\n");
+    fprintf(out, "  --overwrite              replace existing files when extracting\n");
+    fprintf(out, "  --skip-existing          skip existing files when extracting\n");
+    fprintf(out, "  --                       stop parsing options\n");
+}
+
+static int is_help_flag(const char *arg)
+{
+    return strcmp(arg, "-h") == 0 || strcmp(arg, "--help") == 0;
 }
 
 static int is_verbose_flag(const char *arg)
@@ -35,38 +49,42 @@ static int push_arg(char **args, int *count, char *arg)
 static int parse_args(int argc, char **argv, char **args, int *count, struct pak_options *opts)
 {
     const char *command;
+    int parsing_options;
     int i;
 
     command = NULL;
+    parsing_options = 1;
     *count = 0;
     memset(opts, 0, sizeof(*opts));
     opts->overwrite_mode = PAK_OVERWRITE_REFUSE;
 
     for (i = 1; i < argc; i++) {
-        if (is_verbose_flag(argv[i])) {
+        if (parsing_options && strcmp(argv[i], "--") == 0) {
+            parsing_options = 0;
+        } else if (parsing_options && is_verbose_flag(argv[i])) {
             opts->verbose = 1;
-        } else if (command == NULL && is_command(argv[i])) {
-            command = argv[i];
-            push_arg(args, count, argv[i]);
-        } else if (command != NULL && strcmp(command, "make") == 0 && strcmp(argv[i], "--paths") == 0) {
+        } else if (parsing_options && strcmp(argv[i], "--paths") == 0) {
             opts->preserve_paths = 1;
-        } else if (command != NULL && strcmp(command, "make") == 0 && strcmp(argv[i], "--compress") == 0) {
+        } else if (parsing_options && strcmp(argv[i], "--compress") == 0) {
             opts->compress = 1;
-        } else if (command != NULL && strcmp(command, "list") == 0 && strcmp(argv[i], "--long") == 0) {
+        } else if (parsing_options && strcmp(argv[i], "--long") == 0) {
             opts->long_list = 1;
-        } else if (command != NULL && strcmp(command, "extract") == 0 && strcmp(argv[i], "--overwrite") == 0) {
+        } else if (parsing_options && strcmp(argv[i], "--overwrite") == 0) {
             opts->overwrite_mode = PAK_OVERWRITE_REPLACE;
-        } else if (command != NULL && strcmp(command, "extract") == 0 && strcmp(argv[i], "--skip-existing") == 0) {
+        } else if (parsing_options && strcmp(argv[i], "--skip-existing") == 0) {
             opts->overwrite_mode = PAK_OVERWRITE_SKIP;
-        } else if (command != NULL && strcmp(command, "extract") == 0 && strcmp(argv[i], "-C") == 0) {
+        } else if (parsing_options && strcmp(argv[i], "-C") == 0) {
             if (i + 1 >= argc) {
                 fprintf(stderr, "pak: -C needs a directory\n");
                 return -1;
             }
             opts->extract_dir = argv[++i];
-        } else if (command != NULL && strcmp(command, "extract") == 0 && strncmp(argv[i], "-C", 2) == 0 && argv[i][2] != '\0') {
+        } else if (parsing_options && strncmp(argv[i], "-C", 2) == 0 && argv[i][2] != '\0') {
             opts->extract_dir = argv[i] + 2;
-        } else if (argv[i][0] == '-' && command != NULL) {
+        } else if (command == NULL && is_command(argv[i])) {
+            command = argv[i];
+            push_arg(args, count, argv[i]);
+        } else if (parsing_options && argv[i][0] == '-') {
             fprintf(stderr, "pak: unknown option '%s'\n", argv[i]);
             return -1;
         } else {
@@ -83,6 +101,14 @@ int main(int argc, char **argv)
     char **args;
     int count;
     int rc;
+    int i;
+
+    for (i = 1; i < argc; i++) {
+        if (is_help_flag(argv[i])) {
+            usage(stdout);
+            return 0;
+        }
+    }
 
     args = calloc((size_t)argc, sizeof(*args));
     if (args == NULL) {
