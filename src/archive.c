@@ -414,12 +414,34 @@ int pak_make(const char *archive_path, int file_count, char **file_paths, const 
     return 0;
 }
 
+static int decimal_width_u64(uint64_t value)
+{
+    int width = 1;
+
+    while (value >= 10) {
+        value /= 10;
+        width++;
+    }
+
+    return width;
+}
+
+
+static int max_int(int left, int right)
+{
+    return left > right ? left : right;
+}
+
 int pak_list(const char *archive_path, const struct pak_options *opts)
 {
     FILE *archive;
+    struct pak_entry *entries;
     uint32_t count;
     uint32_t i;
     int version;
+    int name_width;
+    int size_width;
+    int stored_width;
 
     log_step(opts, "read %s", archive_path);
     archive = fopen(archive_path, "rb");
@@ -434,42 +456,62 @@ int pak_list(const char *archive_path, const struct pak_options *opts)
         return -1;
     }
 
+    entries = calloc(count == 0 ? 1 : count, sizeof(*entries));
+    if (entries == NULL) {
+        fprintf(stderr, "pak: out of memory\n");
+        fclose(archive);
+        return -1;
+    }
+
+    name_width = 4;
+    size_width = 4;
+    stored_width = 6;
+    for (i = 0; i < count; i++) {
+        if (read_entry_header(archive, version, &entries[i]) != 0) {
+            fprintf(stderr, "pak: damaged entry in '%s'\n", archive_path);
+            goto fail;
+        }
+
+        name_width = max_int(name_width, (int)strlen(entries[i].name));
+        size_width = max_int(size_width, decimal_width_u64(entries[i].size));
+        stored_width = max_int(stored_width, decimal_width_u64(entries[i].stored_size));
+
+        if (skip_bytes(archive, entries[i].stored_size) != 0) {
+            fprintf(stderr, "pak: damaged data for '%s'\n", entries[i].name);
+            goto fail;
+        }
+    }
+
     if (opts->long_list) {
-        printf("%-32s %12s %12s %-8s %-10s\n", "name", "size", "stored", "method", "crc32");
+        printf("%-*s  %*s  %*s  %-6s  %-8s\n", name_width, "name", size_width, "size", stored_width, "stored", "method", "crc32");
+        for (i = 0; i < count; i++) {
+            if (version == 1) {
+                printf("%-*s  %*llu  %*llu  %-6s  %-8s\n", name_width, entries[i].name, size_width, (unsigned long long)entries[i].size, stored_width, (unsigned long long)entries[i].stored_size, entry_method(&entries[i]), "-");
+            } else {
+                printf("%-*s  %*llu  %*llu  %-6s  %08x\n", name_width, entries[i].name, size_width, (unsigned long long)entries[i].size, stored_width, (unsigned long long)entries[i].stored_size, entry_method(&entries[i]), entries[i].checksum);
+            }
+        }
+    } else {
+        for (i = 0; i < count; i++) {
+            printf("%-*s  %llu bytes\n", name_width, entries[i].name, (unsigned long long)entries[i].size);
+        }
     }
 
     for (i = 0; i < count; i++) {
-        struct pak_entry entry;
-
-        if (read_entry_header(archive, version, &entry) != 0) {
-            fprintf(stderr, "pak: damaged entry in '%s'\n", archive_path);
-            fclose(archive);
-            return -1;
-        }
-
-        if (opts->long_list) {
-            if (version == 1) {
-                printf("%-32s %12llu %12llu %-8s %-10s\n", entry.name, (unsigned long long)entry.size, (unsigned long long)entry.stored_size, entry_method(&entry), "-");
-            } else {
-                printf("%-32s %12llu %12llu %-8s %08x\n", entry.name, (unsigned long long)entry.size, (unsigned long long)entry.stored_size, entry_method(&entry), entry.checksum);
-            }
-        } else {
-            printf("%-32s %llu bytes\n", entry.name, (unsigned long long)entry.size);
-        }
-
-        if (skip_bytes(archive, entry.stored_size) != 0) {
-            fprintf(stderr, "pak: damaged data for '%s'\n", entry.name);
-            free_entry(&entry);
-            fclose(archive);
-            return -1;
-        }
-        free_entry(&entry);
+        free_entry(&entries[i]);
     }
-
+    free(entries);
     fclose(archive);
     return 0;
-}
 
+fail:
+    for (i = 0; i < count; i++) {
+        free_entry(&entries[i]);
+    }
+    free(entries);
+    fclose(archive);
+    return -1;
+}
 static int process_entry_data(FILE *archive, FILE *out, const struct pak_entry *entry, int version, const struct pak_options *opts, int check_crc)
 {
     uint32_t crc = crc32_start();
