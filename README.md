@@ -26,11 +26,14 @@ pak list --long assets.pak
 
 pak extract assets.pak
 pak extract -C out assets.pak
+pak extract -C out assets.pak config.txt image.png
 pak extract --overwrite -C out assets.pak
 pak extract --skip-existing -C out assets.pak
 
+pak cat assets.pak config.txt
 pak info assets.pak
 pak verify assets.pak
+pak test assets.pak
 ```
 
 ## Flags
@@ -44,3 +47,5 @@ pak verify assets.pak
 * `--skip-existing`: keep existing files and skip extracting those entries.
 
 By default extraction will not overwrite existing files.
+
+`extract` accepts optional file names. When names are provided, only matching archive entries are extracted.

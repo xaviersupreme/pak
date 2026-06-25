@@ -26,7 +26,8 @@ struct pak_options {
 
 int pak_make(const char *archive_path, int file_count, char **file_paths, const struct pak_options *opts);
 int pak_list(const char *archive_path, const struct pak_options *opts);
-int pak_extract(const char *archive_path, const struct pak_options *opts);
+int pak_extract(const char *archive_path, int selected_count, char **selected_names, const struct pak_options *opts);
+int pak_cat(const char *archive_path, const char *entry_name, const struct pak_options *opts);
 int pak_info(const char *archive_path, const struct pak_options *opts);
 int pak_verify(const char *archive_path, const struct pak_options *opts);
 

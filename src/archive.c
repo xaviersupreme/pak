@@ -7,6 +7,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
+#endif
+
 #ifndef SIZE_MAX
 #define SIZE_MAX ((size_t)-1)
 #endif
@@ -432,6 +437,49 @@ static int max_int(int left, int right)
     return left > right ? left : right;
 }
 
+static int entry_is_selected(const char *entry_name, int selected_count, char **selected_names)
+{
+    int i;
+
+    if (selected_count == 0) {
+        return 1;
+    }
+
+    for (i = 0; i < selected_count; i++) {
+        if (strcmp(entry_name, selected_names[i]) == 0) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+static void mark_selected(const char *entry_name, int selected_count, char **selected_names, int *seen)
+{
+    int i;
+
+    for (i = 0; i < selected_count; i++) {
+        if (strcmp(entry_name, selected_names[i]) == 0) {
+            seen[i] = 1;
+        }
+    }
+}
+
+static int report_missing_selected(int selected_count, char **selected_names, int *seen)
+{
+    int missing = 0;
+    int i;
+
+    for (i = 0; i < selected_count; i++) {
+        if (!seen[i]) {
+            fprintf(stderr, "pak: not found '%s'\n", selected_names[i]);
+            missing = 1;
+        }
+    }
+
+    return missing ? -1 : 0;
+}
+
 int pak_list(const char *archive_path, const struct pak_options *opts)
 {
     FILE *archive;
@@ -536,14 +584,22 @@ static int process_entry_data(FILE *archive, FILE *out, const struct pak_entry *
     return 0;
 }
 
-int pak_extract(const char *archive_path, const struct pak_options *opts)
+int pak_cat(const char *archive_path, const char *entry_name, const struct pak_options *opts)
 {
     FILE *archive;
+    struct pak_options quiet_opts;
     uint32_t count;
     uint32_t i;
     int version;
+    int found = 0;
 
-    log_step(opts, "read %s", archive_path);
+    quiet_opts = *opts;
+    quiet_opts.verbose = 0;
+
+#ifdef _WIN32
+    _setmode(_fileno(stdout), _O_BINARY);
+#endif
+
     archive = fopen(archive_path, "rb");
     if (archive == NULL) {
         fprintf(stderr, "pak: %s: %s\n", archive_path, strerror(errno));
@@ -556,7 +612,81 @@ int pak_extract(const char *archive_path, const struct pak_options *opts)
         return -1;
     }
 
-    log_step(opts, "extract %u file%s", count, count == 1 ? "" : "s");
+    for (i = 0; i < count; i++) {
+        struct pak_entry entry;
+
+        if (read_entry_header(archive, version, &entry) != 0) {
+            fprintf(stderr, "pak: damaged entry in '%s'\n", archive_path);
+            fclose(archive);
+            return -1;
+        }
+
+        if (strcmp(entry.name, entry_name) != 0) {
+            if (skip_bytes(archive, entry.stored_size) != 0) {
+                fprintf(stderr, "pak: damaged data for '%s'\n", entry.name);
+                free_entry(&entry);
+                fclose(archive);
+                return -1;
+            }
+            free_entry(&entry);
+            continue;
+        }
+
+        found = 1;
+        if (process_entry_data(archive, stdout, &entry, version, &quiet_opts, 1) != 0) {
+            fprintf(stderr, "pak: failed while reading '%s'\n", entry.name);
+            free_entry(&entry);
+            fclose(archive);
+            return -1;
+        }
+        fflush(stdout);
+        free_entry(&entry);
+        break;
+    }
+
+    fclose(archive);
+    if (!found) {
+        fprintf(stderr, "pak: not found '%s'\n", entry_name);
+        return -1;
+    }
+
+    return 0;
+}
+
+int pak_extract(const char *archive_path, int selected_count, char **selected_names, const struct pak_options *opts)
+{
+    FILE *archive;
+    int *seen;
+    uint32_t count;
+    uint32_t i;
+    int version;
+
+    seen = calloc(selected_count == 0 ? 1 : (size_t)selected_count, sizeof(*seen));
+    if (seen == NULL) {
+        fprintf(stderr, "pak: out of memory\n");
+        return -1;
+    }
+
+    log_step(opts, "read %s", archive_path);
+    archive = fopen(archive_path, "rb");
+    if (archive == NULL) {
+        fprintf(stderr, "pak: %s: %s\n", archive_path, strerror(errno));
+        free(seen);
+        return -1;
+    }
+
+    if (read_archive_header(archive, &version, &count) != 0) {
+        fprintf(stderr, "pak: bad archive '%s'\n", archive_path);
+        fclose(archive);
+        free(seen);
+        return -1;
+    }
+
+    if (selected_count == 0) {
+        log_step(opts, "extract %u file%s", count, count == 1 ? "" : "s");
+    } else {
+        log_step(opts, "extract %d selected file%s", selected_count, selected_count == 1 ? "" : "s");
+    }
     for (i = 0; i < count; i++) {
         struct pak_entry entry;
         char *out_path;
@@ -565,14 +695,29 @@ int pak_extract(const char *archive_path, const struct pak_options *opts)
         if (read_entry_header(archive, version, &entry) != 0) {
             fprintf(stderr, "pak: damaged entry in '%s'\n", archive_path);
             fclose(archive);
+            free(seen);
             return -1;
         }
+
+        if (!entry_is_selected(entry.name, selected_count, selected_names)) {
+            if (skip_bytes(archive, entry.stored_size) != 0) {
+                fprintf(stderr, "pak: damaged data for '%s'\n", entry.name);
+                free_entry(&entry);
+                fclose(archive);
+                free(seen);
+                return -1;
+            }
+            free_entry(&entry);
+            continue;
+        }
+        mark_selected(entry.name, selected_count, selected_names, seen);
 
         out_path = io_join_path(opts->extract_dir, entry.name);
         if (out_path == NULL) {
             fprintf(stderr, "pak: out of memory\n");
             free_entry(&entry);
             fclose(archive);
+            free(seen);
             return -1;
         }
 
@@ -584,6 +729,7 @@ int pak_extract(const char *archive_path, const struct pak_options *opts)
                     free(out_path);
                     free_entry(&entry);
                     fclose(archive);
+                    free(seen);
                     return -1;
                 }
                 free(out_path);
@@ -595,6 +741,7 @@ int pak_extract(const char *archive_path, const struct pak_options *opts)
                 free(out_path);
                 free_entry(&entry);
                 fclose(archive);
+                free(seen);
                 return -1;
             }
         }
@@ -604,6 +751,7 @@ int pak_extract(const char *archive_path, const struct pak_options *opts)
             free(out_path);
             free_entry(&entry);
             fclose(archive);
+            free(seen);
             return -1;
         }
 
@@ -614,6 +762,7 @@ int pak_extract(const char *archive_path, const struct pak_options *opts)
             free(out_path);
             free_entry(&entry);
             fclose(archive);
+            free(seen);
             return -1;
         }
 
@@ -623,6 +772,7 @@ int pak_extract(const char *archive_path, const struct pak_options *opts)
             free(out_path);
             free_entry(&entry);
             fclose(archive);
+            free(seen);
             return -1;
         }
 
@@ -633,6 +783,11 @@ int pak_extract(const char *archive_path, const struct pak_options *opts)
 
     fclose(archive);
     log_step(opts, "done");
+    if (report_missing_selected(selected_count, selected_names, seen) != 0) {
+        free(seen);
+        return -1;
+    }
+    free(seen);
     return 0;
 }
 
