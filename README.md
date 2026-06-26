@@ -16,6 +16,10 @@ Windows fallback:
 .\make.ps1
 ```
 
+## releases
+
+Builds are on the GitHub Releases page.
+
 ## quick start
 
 ```sh

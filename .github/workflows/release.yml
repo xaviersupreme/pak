@@ -1,0 +1,112 @@
+name: release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing release tag to receive the built files
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows x64
+            runner: windows-2022
+            target: windows-x64
+            msystem: MINGW64
+            packages: mingw-w64-x86_64-gcc make
+            archive: zip
+          - name: windows x86
+            runner: windows-2022
+            target: windows-x86
+            msystem: MINGW32
+            packages: mingw-w64-i686-gcc make
+            archive: zip
+          - name: macos intel
+            runner: macos-14
+            target: macos-x64
+            macos_arch: x86_64
+            archive: tar.gz
+          - name: macos apple silicon
+            runner: macos-14
+            target: macos-arm64
+            macos_arch: arm64
+            archive: tar.gz
+          - name: linux x64
+            runner: ubuntu-latest
+            target: linux-x64-musl
+            archive: tar.gz
+          - name: linux arm64
+            runner: ubuntu-24.04-arm
+            target: linux-arm64-musl
+            archive: tar.gz
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: msys2/setup-msys2@v2
+        if: matrix.msystem
+        with:
+          msystem: ${{ matrix.msystem }}
+          update: true
+          install: ${{ matrix.packages }}
+
+      - name: build windows
+        if: matrix.msystem
+        shell: msys2 {0}
+        run: make CC=gcc
+
+      - name: build macos
+        if: startsWith(matrix.target, 'macos-')
+        run: make CFLAGS="-std=c11 -Wall -Wextra -pedantic -O2 -arch ${{ matrix.macos_arch }}" LDFLAGS="-arch ${{ matrix.macos_arch }}"
+
+      - name: build linux
+        if: startsWith(matrix.target, 'linux-')
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes musl-tools
+          make CC=musl-gcc LDFLAGS=-static
+
+      - name: package windows
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: Compress-Archive -Path pak.exe -DestinationPath pak-${{ matrix.target }}.zip
+
+      - name: package unix
+        if: matrix.archive == 'tar.gz'
+        run: tar -czf pak-${{ matrix.target }}.tar.gz pak
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pak-${{ matrix.target }}
+          path: pak-${{ matrix.target }}.${{ matrix.archive }}
+          if-no-files-found: error
+
+  upload_release:
+    if: github.event_name == 'release' || inputs.release_tag != ''
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: release
+          merge-multiple: true
+
+      - name: upload release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.release_tag }}
+        run: gh release upload "$TAG" release/* --clobber
