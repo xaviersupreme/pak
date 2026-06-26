@@ -1,8 +1,16 @@
 $ErrorActionPreference = 'Stop'
 
-$cc = 'cc'
-if (Get-Command clang -ErrorAction SilentlyContinue) {
-    $cc = 'clang'
+$cc = $null
+foreach ($candidate in @('clang', 'gcc', 'cc')) {
+    if (Get-Command $candidate -ErrorAction SilentlyContinue) {
+        $cc = $candidate
+        break
+    }
+}
+
+if ($null -eq $cc) {
+    Write-Error 'no C compiler found. install clang, gcc, or cc.'
+    exit 1
 }
 
 & $cc -std=c11 -Wall -Wextra -pedantic -O2 `
