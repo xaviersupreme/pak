@@ -18,8 +18,7 @@ Windows fallback:
 
 <!-- ## releases
 
-Builds are on the GitHub Releases page.
--->
+Builds are on the GitHub Releases page. -->
 
 ## quick start
 
@@ -37,15 +36,12 @@ pak unpack assets.pak -C out
 pak make [options] <archive> <files...>
 pak make [options] <archive> <dirs...>
 pak list [--long] <archive.pak>
-pak extract [options] <archive.pak> [files...]
-pak unpack [options] <archive.pak> [files...]
+pak unpack|extract [options] <archive.pak> [files...]
 pak cat <archive.pak> <file>
 pak info <archive.pak>
 pak verify <archive.pak>
 pak test <archive.pak>
 ```
-
-`unpack` is the same command as `extract`.
 
 ## examples
 
@@ -88,6 +84,8 @@ pak make weird -- -dash.txt
 
 `--`
 : Stop option parsing.
+
+<br>
 
 By default, unpacking refuses to overwrite files.
 
