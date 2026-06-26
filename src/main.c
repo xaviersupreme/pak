@@ -40,6 +40,47 @@ static int push_arg(char **args, int *count, char *arg)
     return 0;
 }
 
+static int ascii_lower(int ch)
+{
+    if (ch >= 'A' && ch <= 'Z') {
+        return ch - 'A' + 'a';
+    }
+
+    return ch;
+}
+
+static int has_pak_extension(const char *path)
+{
+    size_t len = strlen(path);
+    const char *ext;
+
+    if (len < 4) {
+        return 0;
+    }
+
+    ext = path + len - 4;
+    return ascii_lower(ext[0]) == '.' && ascii_lower(ext[1]) == 'p' && ascii_lower(ext[2]) == 'a' && ascii_lower(ext[3]) == 'k';
+}
+
+static char *make_archive_path(const char *path)
+{
+    char *out;
+    size_t len;
+
+    len = strlen(path);
+    out = malloc(len + (has_pak_extension(path) ? 1 : 5));
+    if (out == NULL) {
+        return NULL;
+    }
+
+    strcpy(out, path);
+    if (!has_pak_extension(path)) {
+        strcat(out, ".pak");
+    }
+
+    return out;
+}
+
 static int parse_args(int argc, char **argv, char **args, int *count, struct pak_options *opts)
 {
     const char *command;
@@ -119,7 +160,15 @@ int main(int argc, char **argv)
             usage(stderr);
             rc = 1;
         } else {
-            rc = pak_make(args[1], count - 2, &args[2], &opts);
+            char *archive_path = make_archive_path(args[1]);
+
+            if (archive_path == NULL) {
+                fprintf(stderr, "pak: out of memory\n");
+                rc = 1;
+            } else {
+                rc = pak_make(archive_path, count - 2, &args[2], &opts);
+                free(archive_path);
+            }
         }
     } else if (strcmp(args[0], "list") == 0) {
         rc = count == 2 ? pak_list(args[1], &opts) : 1;

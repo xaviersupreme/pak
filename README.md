@@ -17,7 +17,7 @@ On windows without `make`:
 ## Commands
 
 ```sh
-pak make assets.pak image.png sound.wav config.txt
+pak make assets image.png sound.wav config.txt
 pak make --compress --overwrite assets.pak big.dat
 pak make --paths assets.pak assets/image.png assets/sound.wav
 pak make --compress assets.pak big.dat
@@ -51,3 +51,4 @@ By default extraction will not overwrite existing files.
 
 `extract` accepts optional file names. When names are provided, only matching archive entries are extracted.
 Options can appear before or after the command and between positional arguments.
+`make` automatically appends `.pak` to the archive name when it is missing.

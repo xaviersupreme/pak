@@ -162,14 +162,14 @@ void log_progress(const struct pak_options *opts, const char *name, uint64_t don
     format_size(done, done_buf, sizeof(done_buf));
     format_size(total, total_buf, sizeof(total_buf));
 
-    printf("\r      %s[", clr(CLR_DIM));
+    printf("\r      %s[", clr(CLR_GREEN));
     for (i = 0; i < width; i++) {
         if (i == 0 || i == filled) {
             fputs(i < filled ? clr(CLR_GREEN) : clr(CLR_DIM), stdout);
         }
         putchar(i < filled ? '#' : '-');
     }
-    printf("%s] %s%3d%%%s  %s%s%s/%s%s%s", clr(CLR_DIM), clr(percent == 100 ? CLR_GREEN : CLR_YELLOW), percent, clr(CLR_RESET), clr(CLR_BOLD), done_buf, clr(CLR_RESET), clr(CLR_DIM), total_buf, clr(CLR_RESET));
+    printf("%s]%s %s%3d%%%s  %s%s%s/%s%s%s", clr(CLR_GREEN), clr(CLR_RESET), clr(percent == 100 ? CLR_GREEN : CLR_YELLOW), percent, clr(CLR_RESET), clr(CLR_BOLD), done_buf, clr(CLR_RESET), clr(CLR_DIM), total_buf, clr(CLR_RESET));
 
     if (force) {
         putchar('\n');
