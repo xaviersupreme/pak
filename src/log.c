@@ -2,7 +2,24 @@
 
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+
+#ifdef _WIN32
+#include <io.h>
+#include <windows.h>
+#define is_stdout_tty() _isatty(_fileno(stdout))
+#else
+#include <unistd.h>
+#define is_stdout_tty() isatty(fileno(stdout))
+#endif
+
+#define CLR_RESET "\033[0m"
+#define CLR_DIM "\033[2m"
+#define CLR_CYAN "\033[36m"
+#define CLR_GREEN "\033[32m"
+#define CLR_YELLOW "\033[33m"
+#define CLR_BOLD "\033[1m"
 
 static void format_size(uint64_t bytes, char *buf, size_t buf_size)
 {
@@ -15,13 +32,65 @@ static void format_size(uint64_t bytes, char *buf, size_t buf_size)
     }
 }
 
+static int color_enabled(void)
+{
+    static int cached = -1;
+    const char *term;
+
+    if (cached != -1) {
+        return cached;
+    }
+
+    if (getenv("FORCE_COLOR") != NULL) {
+        cached = 1;
+        return cached;
+    }
+    if (getenv("NO_COLOR") != NULL) {
+        cached = 0;
+        return cached;
+    }
+    if (!is_stdout_tty()) {
+        cached = 0;
+        return cached;
+    }
+
+    term = getenv("TERM");
+    if (term != NULL && strcmp(term, "dumb") == 0) {
+        cached = 0;
+        return cached;
+    }
+
+#ifdef _WIN32
+    {
+        HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
+        DWORD mode;
+
+        if (out == INVALID_HANDLE_VALUE || !GetConsoleMode(out, &mode)) {
+            cached = 0;
+            return cached;
+        }
+        SetConsoleMode(out, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+    }
+#endif
+
+    cached = 1;
+    return cached;
+}
+
+static const char *clr(const char *code)
+{
+    return color_enabled() ? code : "";
+}
+
 static void vlog_line(const struct pak_options *opts, const char *prefix, const char *fmt, va_list ap)
 {
     if (opts != NULL && opts->quiet) {
         return;
     }
 
+    fputs(clr(CLR_CYAN), stdout);
     fputs(prefix, stdout);
+    fputs(clr(CLR_RESET), stdout);
     vfprintf(stdout, fmt, ap);
     fputc('\n', stdout);
 }
@@ -43,10 +112,12 @@ void log_item(const struct pak_options *opts, int index, int total, const char *
         return;
     }
 
-    printf("  %d/%d  ", index, total);
+    printf("  %s%d/%d%s  ", clr(CLR_DIM), index, total, clr(CLR_RESET));
+    fputs(clr(CLR_BOLD), stdout);
     va_start(ap, fmt);
     vfprintf(stdout, fmt, ap);
     va_end(ap);
+    fputs(clr(CLR_RESET), stdout);
     fputc('\n', stdout);
 }
 
@@ -91,11 +162,14 @@ void log_progress(const struct pak_options *opts, const char *name, uint64_t don
     format_size(done, done_buf, sizeof(done_buf));
     format_size(total, total_buf, sizeof(total_buf));
 
-    printf("\r      [");
+    printf("\r      %s[", clr(CLR_DIM));
     for (i = 0; i < width; i++) {
+        if (i == 0 || i == filled) {
+            fputs(i < filled ? clr(CLR_GREEN) : clr(CLR_DIM), stdout);
+        }
         putchar(i < filled ? '#' : '-');
     }
-    printf("] %3d%%  %s/%s", percent, done_buf, total_buf);
+    printf("%s] %s%3d%%%s  %s%s%s/%s%s%s", clr(CLR_DIM), clr(percent == 100 ? CLR_GREEN : CLR_YELLOW), percent, clr(CLR_RESET), clr(CLR_BOLD), done_buf, clr(CLR_RESET), clr(CLR_DIM), total_buf, clr(CLR_RESET));
 
     if (force) {
         putchar('\n');
