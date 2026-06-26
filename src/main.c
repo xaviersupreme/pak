@@ -10,6 +10,7 @@ static void usage(FILE *out)
     fprintf(out, "  pak make [options] <archive.pak> <files...>\n");
     fprintf(out, "  pak list [options] <archive.pak>\n");
     fprintf(out, "  pak extract [options] <archive.pak> [files...]\n");
+    fprintf(out, "  pak unpack [options] <archive.pak> [files...]\n");
     fprintf(out, "  pak cat <archive.pak> <file>\n");
     fprintf(out, "  pak info <archive.pak>\n");
     fprintf(out, "  pak verify|test <archive.pak>\n");
@@ -30,7 +31,7 @@ static int is_help_flag(const char *arg)
 
 static int is_command(const char *arg)
 {
-    return strcmp(arg, "make") == 0 || strcmp(arg, "list") == 0 || strcmp(arg, "extract") == 0 || strcmp(arg, "cat") == 0 || strcmp(arg, "info") == 0 || strcmp(arg, "verify") == 0 || strcmp(arg, "test") == 0;
+    return strcmp(arg, "make") == 0 || strcmp(arg, "list") == 0 || strcmp(arg, "extract") == 0 || strcmp(arg, "unpack") == 0 || strcmp(arg, "cat") == 0 || strcmp(arg, "info") == 0 || strcmp(arg, "verify") == 0 || strcmp(arg, "test") == 0;
 }
 
 static int push_arg(char **args, int *count, char *arg)
@@ -79,6 +80,12 @@ static char *make_archive_path(const char *path)
     }
 
     return out;
+}
+
+static void wrong_args(const char *command, const char *problem, const char *example)
+{
+    fprintf(stderr, "pak: %s: %s\n", command, problem);
+    fprintf(stderr, "try: %s\n", example);
 }
 
 static int parse_args(int argc, char **argv, char **args, int *count, struct pak_options *opts)
@@ -149,15 +156,24 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    if (parse_args(argc, argv, args, &count, &opts) != 0 || count < 2) {
-        usage(stderr);
+    if (parse_args(argc, argv, args, &count, &opts) != 0) {
+        free(args);
+        return 1;
+    }
+    if (count == 0) {
+        fprintf(stderr, "pak: no command given\n");
+        fprintf(stderr, "try: pak --help\n");
         free(args);
         return 1;
     }
 
     if (strcmp(args[0], "make") == 0) {
         if (count < 3) {
-            usage(stderr);
+            if (count == 1) {
+                wrong_args("make", "missing archive name and input files", "pak make assets image.png sound.wav");
+            } else {
+                wrong_args("make", "missing input files", "pak make assets.pak image.png sound.wav");
+            }
             rc = 1;
         } else {
             char *archive_path = make_archive_path(args[1]);
@@ -171,22 +187,47 @@ int main(int argc, char **argv)
             }
         }
     } else if (strcmp(args[0], "list") == 0) {
-        rc = count == 2 ? pak_list(args[1], &opts) : 1;
-    } else if (strcmp(args[0], "extract") == 0) {
-        rc = count >= 2 ? pak_extract(args[1], count - 2, &args[2], &opts) : 1;
+        if (count == 2) {
+            rc = pak_list(args[1], &opts);
+        } else {
+            wrong_args("list", count < 2 ? "missing archive name" : "too many arguments", "pak list assets.pak");
+            rc = 1;
+        }
+    } else if (strcmp(args[0], "extract") == 0 || strcmp(args[0], "unpack") == 0) {
+        if (count >= 2) {
+            rc = pak_extract(args[1], count - 2, &args[2], &opts);
+        } else {
+            wrong_args(args[0], "missing archive name", "pak unpack assets.pak -C out");
+            rc = 1;
+        }
     } else if (strcmp(args[0], "cat") == 0) {
-        rc = count == 3 ? pak_cat(args[1], args[2], &opts) : 1;
+        if (count == 3) {
+            rc = pak_cat(args[1], args[2], &opts);
+        } else if (count < 3) {
+            wrong_args("cat", count < 2 ? "missing archive name and file name" : "missing file name", "pak cat assets.pak config.txt");
+            rc = 1;
+        } else {
+            wrong_args("cat", "too many arguments", "pak cat assets.pak config.txt");
+            rc = 1;
+        }
     } else if (strcmp(args[0], "info") == 0) {
-        rc = count == 2 ? pak_info(args[1], &opts) : 1;
+        if (count == 2) {
+            rc = pak_info(args[1], &opts);
+        } else {
+            wrong_args("info", count < 2 ? "missing archive name" : "too many arguments", "pak info assets.pak");
+            rc = 1;
+        }
     } else if (strcmp(args[0], "verify") == 0 || strcmp(args[0], "test") == 0) {
-        rc = count == 2 ? pak_verify(args[1], &opts) : 1;
+        if (count == 2) {
+            rc = pak_verify(args[1], &opts);
+        } else {
+            wrong_args(args[0], count < 2 ? "missing archive name" : "too many arguments", "pak test assets.pak");
+            rc = 1;
+        }
     } else {
         fprintf(stderr, "pak: unknown command '%s'\n", args[0]);
+        fprintf(stderr, "known: make, list, extract, unpack, cat, info, verify, test\n");
         rc = 1;
-    }
-
-    if (rc != 0 && ((strcmp(args[0], "list") == 0 && count != 2) || (strcmp(args[0], "extract") == 0 && count < 2) || (strcmp(args[0], "cat") == 0 && count != 3) || (strcmp(args[0], "info") == 0 && count != 2) || ((strcmp(args[0], "verify") == 0 || strcmp(args[0], "test") == 0) && count != 2))) {
-        usage(stderr);
     }
 
     free(args);

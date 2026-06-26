@@ -1,55 +1,93 @@
 # pak
 
-Small file packer CLI written in C.
+`pak` bundles loose files into one simple archive.
 
-## Build
+It is meant for asset packs, small tools, configs, test fixtures, and anything else where a plain "put these files in one file" format is enough.
+
+## build
 
 ```sh
 make
 ```
 
-On windows without `make`:
+Windows fallback:
 
 ```powershell
 .\make.ps1
 ```
 
-## Commands
+## quick start
 
 ```sh
 pak make assets image.png sound.wav config.txt
-pak make --compress --overwrite assets.pak big.dat
-pak make --paths assets.pak assets/image.png assets/sound.wav
-pak make --compress assets.pak big.dat
-
 pak list assets.pak
+pak unpack assets.pak -C out
+```
+
+`make` appends `.pak` when the archive name does not already end in `.pak`.
+
+## commands
+
+```sh
+pak make [options] <archive> <files...>
+pak list [--long] <archive.pak>
+pak extract [options] <archive.pak> [files...]
+pak unpack [options] <archive.pak> [files...]
+pak cat <archive.pak> <file>
+pak info <archive.pak>
+pak verify <archive.pak>
+pak test <archive.pak>
+```
+
+`unpack` is the same as `extract`.
+
+## examples
+
+```sh
+pak make --compress assets sprites.png theme.wav config.txt
+pak make --paths game assets/sprites/player.png assets/audio/jump.wav
 pak list --long assets.pak
-
-pak extract assets.pak
-pak extract -C out assets.pak
-pak extract -C out assets.pak config.txt image.png
-pak extract --overwrite -C out assets.pak
-pak extract --skip-existing -C out assets.pak
-
+pak unpack assets.pak config.txt -C out
+pak unpack --overwrite assets.pak -C out
 pak cat assets.pak config.txt
-pak info assets.pak
-pak verify assets.pak
 pak test assets.pak
 ```
 
-## Flags
+Use `--` when a filename starts with `-`:
 
-* `--paths`: store each files relative path, rather than just its base name.
-* `--compress`: use the built in RLE compression when it reduces the size of an entry.
-* `--long`: include stored size, method, and CRC32 when using `list`.
-* `-C dir`: extract files into `dir`.
-* `--overwrite`: overwrite files that already exist during extraction.
-* `--skip-existing`: keep existing files and skip extracting those entries.
-* `--`: stop option parsing so filenames can start with `-`.
+```sh
+pak make weird -- -dash.txt
+```
 
-By default extraction will not overwrite existing files.
+## options
 
-`extract` accepts optional file names. When names are provided, only matching archive entries are extracted.
+| option | use |
+| --- | --- |
+| `--compress` | use built-in RLE when it makes an entry smaller |
+| `--paths` | store relative paths instead of only base names |
+| `--long` | show stored size, method, and CRC32 in `list` |
+| `-C dir` | unpack into `dir` |
+| `--overwrite` | replace existing files while unpacking |
+| `--skip-existing` | leave existing files alone |
+| `--` | stop option parsing |
+
+By default, unpacking refuses to overwrite files.
+
+`extract` and `unpack` accept optional file names. When names are provided, only matching entries are unpacked.
+
 Options can appear before or after the command and between positional arguments.
 
-`make` automatically appends `.pak` to the archive name when it is missing.
+## format
+
+Current archives are `PAK2`.
+
+Each entry stores:
+
+- name
+- uncompressed size
+- stored size
+- method: `store` or `rle`
+- CRC32
+- raw entry bytes
+
+`pak` can still read older `PAK1` archives.

@@ -10,6 +10,10 @@
 #ifdef _WIN32
 #include <fcntl.h>
 #include <io.h>
+#define stdout_is_tty() _isatty(_fileno(stdout))
+#else
+#include <unistd.h>
+#define stdout_is_tty() isatty(fileno(stdout))
 #endif
 
 #ifndef SIZE_MAX
@@ -633,6 +637,14 @@ int pak_cat(const char *archive_path, const char *entry_name, const struct pak_o
         }
 
         found = 1;
+        if (stdout_is_tty() && entry.size > 1024ull * 1024ull) {
+            fprintf(stderr, "pak: '%s' is %llu bytes; cat would dump it into your terminal\n", entry.name, (unsigned long long)entry.size);
+            fprintf(stderr, "try: pak cat %s %s > %s\n", archive_path, entry.name, entry.name);
+            fprintf(stderr, "or:  pak unpack %s %s\n", archive_path, entry.name);
+            free_entry(&entry);
+            fclose(archive);
+            return -1;
+        }
         if (process_entry_data(archive, stdout, &entry, version, &quiet_opts, 1) != 0) {
             fprintf(stderr, "pak: failed while reading '%s'\n", entry.name);
             free_entry(&entry);
