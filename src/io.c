@@ -125,6 +125,13 @@ int io_is_safe_path(const char *name)
     return 1;
 }
 
+static void strip_leading_current_dir(char *path)
+{
+    while (path[0] == '.' && path[1] == '/') {
+        memmove(path, path + 2, strlen(path + 2) + 1);
+    }
+}
+
 char *io_archive_name(const char *path, int preserve_paths)
 {
     const char *src;
@@ -141,6 +148,9 @@ char *io_archive_name(const char *path, int preserve_paths)
         *w = *src == '\\' ? '/' : *src;
     }
     *w = '\0';
+    if (preserve_paths) {
+        strip_leading_current_dir(out);
+    }
 
     if ((preserve_paths && !io_is_safe_path(out)) || (!preserve_paths && !io_is_plain_name(out))) {
         free(out);
