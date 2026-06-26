@@ -16,7 +16,7 @@
 #define PAK_OVERWRITE_SKIP 2
 
 struct pak_options {
-    int verbose;
+    int quiet;
     int preserve_paths;
     int compress;
     int long_list;

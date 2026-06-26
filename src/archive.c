@@ -594,7 +594,7 @@ int pak_cat(const char *archive_path, const char *entry_name, const struct pak_o
     int found = 0;
 
     quiet_opts = *opts;
-    quiet_opts.verbose = 0;
+    quiet_opts.quiet = 1;
 
 #ifdef _WIN32
     _setmode(_fileno(stdout), _O_BINARY);

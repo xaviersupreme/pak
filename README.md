@@ -39,7 +39,6 @@ pak test assets.pak
 
 ## Flags
 
-* `--v`, `-v`, `--verbose`: print progress while packing or extracting.
 * `--paths`: store each files relative path, rather than just its base name.
 * `--compress`: use the built in RLE compression when it reduces the size of an entry.
 * `--long`: include stored size, method, and CRC32 when using `list`.

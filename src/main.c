@@ -14,7 +14,6 @@ static void usage(FILE *out)
     fprintf(out, "  pak info <archive.pak>\n");
     fprintf(out, "  pak verify|test <archive.pak>\n");
     fprintf(out, "\noptions:\n");
-    fprintf(out, "  -v, --v, --verbose       show progress\n");
     fprintf(out, "  --compress               compress entries when useful\n");
     fprintf(out, "  --paths                  keep relative paths\n");
     fprintf(out, "  --long                   detailed list output\n");
@@ -27,11 +26,6 @@ static void usage(FILE *out)
 static int is_help_flag(const char *arg)
 {
     return strcmp(arg, "-h") == 0 || strcmp(arg, "--help") == 0;
-}
-
-static int is_verbose_flag(const char *arg)
-{
-    return strcmp(arg, "--v") == 0 || strcmp(arg, "-v") == 0 || strcmp(arg, "--verbose") == 0;
 }
 
 static int is_command(const char *arg)
@@ -61,8 +55,6 @@ static int parse_args(int argc, char **argv, char **args, int *count, struct pak
     for (i = 1; i < argc; i++) {
         if (parsing_options && strcmp(argv[i], "--") == 0) {
             parsing_options = 0;
-        } else if (parsing_options && is_verbose_flag(argv[i])) {
-            opts->verbose = 1;
         } else if (parsing_options && strcmp(argv[i], "--paths") == 0) {
             opts->preserve_paths = 1;
         } else if (parsing_options && strcmp(argv[i], "--compress") == 0) {
