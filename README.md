@@ -70,7 +70,7 @@ pak make weird -- -dash.txt
 : Store relative paths instead of only base names.
 
 `--long`
-: Show stored size, method, and CRC32 in `list`.
+: Show readable sizes, stored size, ratio, method, and CRC32 in `list`.
 
 `-C dir`
 : Unpack into `dir`.

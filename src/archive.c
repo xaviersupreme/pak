@@ -445,22 +445,87 @@ int pak_make(const char *archive_path, int file_count, char **file_paths, const 
     return 0;
 }
 
-static int decimal_width_u64(uint64_t value)
-{
-    int width = 1;
-
-    while (value >= 10) {
-        value /= 10;
-        width++;
-    }
-
-    return width;
-}
-
-
 static int max_int(int left, int right)
 {
     return left > right ? left : right;
+}
+
+static void format_list_size(char *buf, size_t buf_size, uint64_t bytes)
+{
+    static const char *units[] = { "B", "KiB", "MiB", "GiB", "TiB" };
+    double value = (double)bytes;
+    int unit = 0;
+
+    while (value >= 1024.0 && unit < 4) {
+        value /= 1024.0;
+        unit++;
+    }
+
+    if (unit == 0) {
+        snprintf(buf, buf_size, "%llu B", (unsigned long long)bytes);
+    } else {
+        snprintf(buf, buf_size, "%.1f %s", value, units[unit]);
+    }
+}
+
+static void format_list_ratio(char *buf, size_t buf_size, uint64_t stored_size, uint64_t size)
+{
+    if (size == 0) {
+        snprintf(buf, buf_size, "0.0%%");
+        return;
+    }
+    snprintf(buf, buf_size, "%.1f%%", (double)stored_size * 100.0 / (double)size);
+}
+
+static int list_name_width(int widest_name)
+{
+    if (widest_name < 24) {
+        return 24;
+    }
+    if (widest_name > 40) {
+        return 40;
+    }
+    return widest_name;
+}
+
+static void print_chars(int ch, int count)
+{
+    int i;
+
+    for (i = 0; i < count; i++) {
+        putchar(ch);
+    }
+}
+
+static void print_long_list_header(int name_width)
+{
+    printf("%-*s  %10s  %10s  %7s  %-7s  %8s\n", name_width, "name", "size", "stored", "ratio", "method", "crc32");
+    print_chars('-', name_width);
+    printf("  ----------  ----------  -------  -------  --------\n");
+}
+
+static void print_long_list_entry(const struct pak_entry *entry, int version, int name_width)
+{
+    char size[16];
+    char stored[16];
+    char ratio[16];
+    char crc[16];
+
+    format_list_size(size, sizeof(size), entry->size);
+    format_list_size(stored, sizeof(stored), entry->stored_size);
+    format_list_ratio(ratio, sizeof(ratio), entry->stored_size, entry->size);
+    if (version == 1) {
+        snprintf(crc, sizeof(crc), "-");
+    } else {
+        snprintf(crc, sizeof(crc), "%08x", entry->checksum);
+    }
+
+    if ((int)strlen(entry->name) <= name_width) {
+        printf("%-*s  %10s  %10s  %7s  %-7s  %8s\n", name_width, entry->name, size, stored, ratio, entry_method(entry), crc);
+    } else {
+        printf("%s\n", entry->name);
+        printf("  size %s  stored %s  ratio %s  method %s  crc32 %s\n", size, stored, ratio, entry_method(entry), crc);
+    }
 }
 
 static int entry_is_selected(const char *entry_name, int selected_count, char **selected_names)
@@ -514,8 +579,6 @@ int pak_list(const char *archive_path, const struct pak_options *opts)
     uint32_t i;
     int version;
     int name_width;
-    int size_width;
-    int stored_width;
 
     log_step(opts, "read %s", archive_path);
     archive = fopen(archive_path, "rb");
@@ -538,8 +601,6 @@ int pak_list(const char *archive_path, const struct pak_options *opts)
     }
 
     name_width = 4;
-    size_width = 4;
-    stored_width = 6;
     for (i = 0; i < count; i++) {
         if (read_entry_header(archive, version, &entries[i]) != 0) {
             fprintf(stderr, "pak: damaged entry in '%s'\n", archive_path);
@@ -547,8 +608,6 @@ int pak_list(const char *archive_path, const struct pak_options *opts)
         }
 
         name_width = max_int(name_width, (int)strlen(entries[i].name));
-        size_width = max_int(size_width, decimal_width_u64(entries[i].size));
-        stored_width = max_int(stored_width, decimal_width_u64(entries[i].stored_size));
 
         if (skip_bytes(archive, entries[i].stored_size) != 0) {
             fprintf(stderr, "pak: damaged data for '%s'\n", entries[i].name);
@@ -557,13 +616,10 @@ int pak_list(const char *archive_path, const struct pak_options *opts)
     }
 
     if (opts->long_list) {
-        printf("%-*s  %*s  %*s  %-7s  %-8s\n", name_width, "name", size_width, "size", stored_width, "stored", "method", "crc32");
+        name_width = list_name_width(name_width);
+        print_long_list_header(name_width);
         for (i = 0; i < count; i++) {
-            if (version == 1) {
-                printf("%-*s  %*llu  %*llu  %-7s  %-8s\n", name_width, entries[i].name, size_width, (unsigned long long)entries[i].size, stored_width, (unsigned long long)entries[i].stored_size, entry_method(&entries[i]), "-");
-            } else {
-                printf("%-*s  %*llu  %*llu  %-7s  %08x\n", name_width, entries[i].name, size_width, (unsigned long long)entries[i].size, stored_width, (unsigned long long)entries[i].stored_size, entry_method(&entries[i]), entries[i].checksum);
-            }
+            print_long_list_entry(&entries[i], version, name_width);
         }
     } else {
         for (i = 0; i < count; i++) {
