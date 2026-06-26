@@ -15,6 +15,12 @@
 #define PAK_OVERWRITE_REPLACE 1
 #define PAK_OVERWRITE_SKIP 2
 
+struct path_list {
+    char **items;
+    int count;
+    int capacity;
+};
+
 struct pak_options {
     int quiet;
     int preserve_paths;
@@ -40,6 +46,10 @@ char *io_join_path(const char *dir, const char *name);
 int io_is_plain_name(const char *name);
 int io_is_safe_path(const char *name);
 
+void path_list_init(struct path_list *list);
+void path_list_free(struct path_list *list);
+int path_list_add_inputs(struct path_list *list, int input_count, char **inputs, int *saw_directory);
+
 void log_step(const struct pak_options *opts, const char *fmt, ...);
 void log_item(const struct pak_options *opts, int index, int total, const char *fmt, ...);
 void log_progress(const struct pak_options *opts, const char *name, uint64_t done, uint64_t total, int force);
@@ -50,6 +60,8 @@ uint32_t crc32_finish(uint32_t crc);
 
 int rle_compress(const unsigned char *in, size_t in_size, unsigned char **out, size_t *out_size);
 int rle_decompress(FILE *in, FILE *out, uint64_t in_size, uint64_t out_size, uint32_t *crc, const char *name, const struct pak_options *opts);
+int deflate_compress(const unsigned char *in, size_t in_size, unsigned char **out, size_t *out_size);
+int deflate_decompress(FILE *in, FILE *out, uint64_t in_size, uint64_t out_size, uint32_t *crc, const char *name, const struct pak_options *opts);
 
 int read_u32_le(FILE *fp, uint32_t *value);
 int read_u64_le(FILE *fp, uint64_t *value);

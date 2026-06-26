@@ -26,7 +26,8 @@
 
 #define PAK_MAGIC_1 "PAK1"
 #define PAK_MAGIC_2 "PAK2"
-#define PAK_FLAG_COMPRESSED 1u
+#define PAK_FLAG_RLE 1u
+#define PAK_FLAG_DEFLATE 2u
 #define COPY_BUF_SIZE 65536u
 
 struct pak_entry {
@@ -49,7 +50,13 @@ static int write_exact(FILE *fp, const void *buf, size_t size)
 
 static const char *entry_method(const struct pak_entry *entry)
 {
-    return (entry->flags & PAK_FLAG_COMPRESSED) != 0 ? "rle" : "store";
+    if ((entry->flags & PAK_FLAG_DEFLATE) != 0) {
+        return "deflate";
+    }
+    if ((entry->flags & PAK_FLAG_RLE) != 0) {
+        return "rle";
+    }
+    return "store";
 }
 
 static void free_entry(struct pak_entry *entry)
@@ -129,7 +136,7 @@ static int read_entry_header(FILE *fp, int version, struct pak_entry *entry)
     if (read_u32_le(fp, &entry->flags) != 0 || read_u64_le(fp, &entry->size) != 0 || read_u64_le(fp, &entry->stored_size) != 0 || read_u32_le(fp, &entry->checksum) != 0 || read_name(fp, name_len, &entry->name) != 0) {
         return -1;
     }
-    if ((entry->flags & ~PAK_FLAG_COMPRESSED) != 0) {
+    if (entry->flags != 0 && entry->flags != PAK_FLAG_RLE && entry->flags != PAK_FLAG_DEFLATE) {
         return -1;
     }
 
@@ -366,17 +373,21 @@ int pak_make(const char *archive_path, int file_count, char **file_paths, const 
     for (i = 0; i < file_count; i++) {
         struct pak_entry entry;
         unsigned char *raw_data;
-        unsigned char *packed_data;
+        unsigned char *deflate_data;
+        unsigned char *rle_data;
         unsigned char *stored_data;
         size_t raw_size;
-        size_t packed_size;
+        size_t deflate_size;
+        size_t rle_size;
 
         memset(&entry, 0, sizeof(entry));
         raw_data = NULL;
-        packed_data = NULL;
+        deflate_data = NULL;
+        rle_data = NULL;
         stored_data = NULL;
         raw_size = 0;
-        packed_size = 0;
+        deflate_size = 0;
+        rle_size = 0;
 
         log_item(opts, i + 1, file_count, "pack %s", names[i]);
         if (read_whole_file(file_paths[i], names[i], &raw_data, &raw_size, &entry.checksum, opts) != 0) {
@@ -392,24 +403,35 @@ int pak_make(const char *archive_path, int file_count, char **file_paths, const 
         entry.stored_size = (uint64_t)raw_size;
         entry.flags = 0;
 
-        if (opts->compress && raw_size > 0 && rle_compress(raw_data, raw_size, &packed_data, &packed_size) == 0 && packed_size < raw_size) {
-            stored_data = packed_data;
-            entry.stored_size = (uint64_t)packed_size;
-            entry.flags = PAK_FLAG_COMPRESSED;
-            log_step(opts, "compressed %s: %llu -> %llu bytes", names[i], (unsigned long long)entry.size, (unsigned long long)entry.stored_size);
+        if (opts->compress && raw_size > 0) {
+            if (deflate_compress(raw_data, raw_size, &deflate_data, &deflate_size) == 0 && deflate_size < entry.stored_size) {
+                stored_data = deflate_data;
+                entry.stored_size = (uint64_t)deflate_size;
+                entry.flags = PAK_FLAG_DEFLATE;
+            }
+            if (rle_compress(raw_data, raw_size, &rle_data, &rle_size) == 0 && rle_size < entry.stored_size) {
+                stored_data = rle_data;
+                entry.stored_size = (uint64_t)rle_size;
+                entry.flags = PAK_FLAG_RLE;
+            }
+            if (entry.flags != 0) {
+                log_step(opts, "compressed %s with %s: %llu -> %llu bytes", names[i], entry_method(&entry), (unsigned long long)entry.size, (unsigned long long)entry.stored_size);
+            }
         }
 
         if (write_entry_data(archive, &entry, stored_data) != 0) {
             fprintf(stderr, "pak: failed while packing '%s'\n", file_paths[i]);
             free(raw_data);
-            free(packed_data);
+            free(deflate_data);
+            free(rle_data);
             fclose(archive);
             free_archive_names(names, file_count);
             return -1;
         }
 
         free(raw_data);
-        free(packed_data);
+        free(deflate_data);
+        free(rle_data);
     }
 
     if (fclose(archive) != 0) {
@@ -535,12 +557,12 @@ int pak_list(const char *archive_path, const struct pak_options *opts)
     }
 
     if (opts->long_list) {
-        printf("%-*s  %*s  %*s  %-6s  %-8s\n", name_width, "name", size_width, "size", stored_width, "stored", "method", "crc32");
+        printf("%-*s  %*s  %*s  %-7s  %-8s\n", name_width, "name", size_width, "size", stored_width, "stored", "method", "crc32");
         for (i = 0; i < count; i++) {
             if (version == 1) {
-                printf("%-*s  %*llu  %*llu  %-6s  %-8s\n", name_width, entries[i].name, size_width, (unsigned long long)entries[i].size, stored_width, (unsigned long long)entries[i].stored_size, entry_method(&entries[i]), "-");
+                printf("%-*s  %*llu  %*llu  %-7s  %-8s\n", name_width, entries[i].name, size_width, (unsigned long long)entries[i].size, stored_width, (unsigned long long)entries[i].stored_size, entry_method(&entries[i]), "-");
             } else {
-                printf("%-*s  %*llu  %*llu  %-6s  %08x\n", name_width, entries[i].name, size_width, (unsigned long long)entries[i].size, stored_width, (unsigned long long)entries[i].stored_size, entry_method(&entries[i]), entries[i].checksum);
+                printf("%-*s  %*llu  %*llu  %-7s  %08x\n", name_width, entries[i].name, size_width, (unsigned long long)entries[i].size, stored_width, (unsigned long long)entries[i].stored_size, entry_method(&entries[i]), entries[i].checksum);
             }
         }
     } else {
@@ -569,7 +591,11 @@ static int process_entry_data(FILE *archive, FILE *out, const struct pak_entry *
     uint32_t crc = crc32_start();
     uint32_t actual;
 
-    if ((entry->flags & PAK_FLAG_COMPRESSED) != 0) {
+    if ((entry->flags & PAK_FLAG_DEFLATE) != 0) {
+        if (deflate_decompress(archive, out, entry->stored_size, entry->size, &crc, entry->name, opts) != 0) {
+            return -1;
+        }
+    } else if ((entry->flags & PAK_FLAG_RLE) != 0) {
         if (rle_decompress(archive, out, entry->stored_size, entry->size, &crc, entry->name, opts) != 0) {
             return -1;
         }
@@ -836,7 +862,7 @@ int pak_info(const char *archive_path, const struct pak_options *opts)
         }
         unpacked_size += entry.size;
         stored_size += entry.stored_size;
-        if ((entry.flags & PAK_FLAG_COMPRESSED) != 0) {
+        if (entry.flags != 0) {
             compressed++;
         }
         if (skip_bytes(archive, entry.stored_size) != 0) {

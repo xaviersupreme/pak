@@ -182,7 +182,20 @@ int main(int argc, char **argv)
                 fprintf(stderr, "pak: out of memory\n");
                 rc = 1;
             } else {
-                rc = pak_make(archive_path, count - 2, &args[2], &opts);
+                struct path_list files;
+                struct pak_options make_opts = opts;
+                int saw_directory;
+
+                path_list_init(&files);
+                if (path_list_add_inputs(&files, count - 2, &args[2], &saw_directory) != 0) {
+                    rc = 1;
+                } else {
+                    if (saw_directory) {
+                        make_opts.preserve_paths = 1;
+                    }
+                    rc = pak_make(archive_path, files.count, files.items, &make_opts);
+                }
+                path_list_free(&files);
                 free(archive_path);
             }
         }

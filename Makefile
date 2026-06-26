@@ -13,9 +13,9 @@ $(error no C compiler found. install clang, gcc, or cc, or run make CC=/path/to/
 endif
 
 CFLAGS ?= -std=c11 -Wall -Wextra -pedantic -O2
-CPPFLAGS ?= -Iinclude
+CPPFLAGS ?= -Iinclude -Ivendor/miniz
 
-SRC = src/main.c src/archive.c src/io.c src/log.c src/endian.c src/crc.c src/compress.c
+SRC = src/main.c src/archive.c src/io.c src/paths.c src/log.c src/endian.c src/crc.c src/compress.c vendor/miniz/miniz.c vendor/miniz/miniz_tdef.c vendor/miniz/miniz_tinfl.c
 OBJ = $(SRC:.c=.o)
 BIN = pak
 

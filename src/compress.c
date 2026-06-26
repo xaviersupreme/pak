@@ -5,6 +5,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "miniz.h"
+
 #define RLE_MARK 0xffu
 #define COPY_BUF_SIZE 65536u
 
@@ -158,4 +160,96 @@ int rle_decompress(FILE *in, FILE *out, uint64_t in_size, uint64_t out_size, uin
     }
 
     return wrote_total == out_size ? 0 : -1;
+}
+
+int deflate_compress(const unsigned char *in, size_t in_size, unsigned char **out, size_t *out_size)
+{
+    mz_ulong bound;
+    mz_ulong dest_len;
+    unsigned char *buf;
+
+    if (in_size > (size_t)MZ_UINT32_MAX) {
+        return -1;
+    }
+
+    bound = mz_compressBound((mz_ulong)in_size);
+    buf = malloc((size_t)bound);
+    if (buf == NULL) {
+        return -1;
+    }
+
+    dest_len = bound;
+    if (mz_compress2(buf, &dest_len, in, (mz_ulong)in_size, MZ_DEFAULT_COMPRESSION) != MZ_OK) {
+        free(buf);
+        return -1;
+    }
+
+    *out = buf;
+    *out_size = (size_t)dest_len;
+    return 0;
+}
+
+int deflate_decompress(FILE *in, FILE *out, uint64_t in_size, uint64_t out_size, uint32_t *crc, const char *name, const struct pak_options *opts)
+{
+    unsigned char in_buf[COPY_BUF_SIZE];
+    unsigned char out_buf[COPY_BUF_SIZE];
+    mz_stream stream;
+    uint64_t read_total = 0;
+    uint64_t wrote_total = 0;
+    int status;
+
+    memset(&stream, 0, sizeof(stream));
+    if (mz_inflateInit(&stream) != MZ_OK) {
+        return -1;
+    }
+
+    status = MZ_OK;
+    while (status != MZ_STREAM_END) {
+        if (stream.avail_in == 0 && read_total < in_size) {
+            size_t want = in_size - read_total > COPY_BUF_SIZE ? COPY_BUF_SIZE : (size_t)(in_size - read_total);
+            size_t got = fread(in_buf, 1, want, in);
+
+            if (got == 0) {
+                mz_inflateEnd(&stream);
+                return -1;
+            }
+            read_total += got;
+            stream.next_in = in_buf;
+            stream.avail_in = (mz_uint)got;
+        }
+
+        stream.next_out = out_buf;
+        stream.avail_out = COPY_BUF_SIZE;
+        status = mz_inflate(&stream, MZ_NO_FLUSH);
+
+        if (status != MZ_OK && status != MZ_STREAM_END && status != MZ_BUF_ERROR) {
+            mz_inflateEnd(&stream);
+            return -1;
+        }
+
+        {
+            size_t produced = COPY_BUF_SIZE - stream.avail_out;
+
+            if (produced > 0) {
+                if (wrote_total + produced > out_size) {
+                    mz_inflateEnd(&stream);
+                    return -1;
+                }
+                if (out != NULL && fwrite(out_buf, 1, produced, out) != produced) {
+                    mz_inflateEnd(&stream);
+                    return -1;
+                }
+                *crc = crc32_update(*crc, out_buf, produced);
+                wrote_total += produced;
+                log_progress(opts, name, wrote_total, out_size, status == MZ_STREAM_END && wrote_total == out_size);
+            }
+            if (produced == 0 && status == MZ_BUF_ERROR && stream.avail_in == 0) {
+                mz_inflateEnd(&stream);
+                return -1;
+            }
+        }
+    }
+
+    mz_inflateEnd(&stream);
+    return read_total == in_size && wrote_total == out_size ? 0 : -1;
 }

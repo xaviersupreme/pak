@@ -1,8 +1,8 @@
 # pak
 
-`pak` bundles loose files into one simple archive.
+`pak` bundles loose files and folders into one archive.
 
-It is meant for asset packs, small tools, configs, test fixtures, and anything else where a plain "put these files in one file" format is enough.
+Use it for asset packs, tools, configs, test fixtures, and simple project data.
 
 ## build
 
@@ -30,6 +30,7 @@ pak unpack assets.pak -C out
 
 ```sh
 pak make [options] <archive> <files...>
+pak make [options] <archive> <dirs...>
 pak list [--long] <archive.pak>
 pak extract [options] <archive.pak> [files...]
 pak unpack [options] <archive.pak> [files...]
@@ -39,12 +40,13 @@ pak verify <archive.pak>
 pak test <archive.pak>
 ```
 
-`unpack` is the same as `extract`.
+`unpack` is the same command as `extract`.
 
 ## examples
 
 ```sh
 pak make --compress assets sprites.png theme.wav config.txt
+pak make --compress assets assets/
 pak make --paths game assets/sprites/player.png assets/audio/jump.wav
 pak list --long assets.pak
 pak unpack assets.pak config.txt -C out
@@ -61,15 +63,26 @@ pak make weird -- -dash.txt
 
 ## options
 
-| option | use |
-| --- | --- |
-| `--compress` | use built-in RLE when it makes an entry smaller |
-| `--paths` | store relative paths instead of only base names |
-| `--long` | show stored size, method, and CRC32 in `list` |
-| `-C dir` | unpack into `dir` |
-| `--overwrite` | replace existing files while unpacking |
-| `--skip-existing` | leave existing files alone |
-| `--` | stop option parsing |
+`--compress`
+: Use deflate through miniz when it makes an entry smaller. RLE is still tried and used when it wins.
+
+`--paths`
+: Store relative paths instead of only base names.
+
+`--long`
+: Show stored size, method, and CRC32 in `list`.
+
+`-C dir`
+: Unpack into `dir`.
+
+`--overwrite`
+: Replace existing files while unpacking.
+
+`--skip-existing`
+: Leave existing files alone.
+
+`--`
+: Stop option parsing.
 
 By default, unpacking refuses to overwrite files.
 
@@ -77,17 +90,19 @@ By default, unpacking refuses to overwrite files.
 
 Options can appear before or after the command and between positional arguments.
 
+When a directory is passed to `make`, pak walks it recursively and stores paths for the files inside it.
+
 ## format
 
 Current archives are `PAK2`.
 
 Each entry stores:
 
-- name
-- uncompressed size
-- stored size
-- method: `store` or `rle`
-- CRC32
-- raw entry bytes
+* name
+* original size
+* stored size
+* method: `store`, `rle`, or `deflate`
+* CRC32
+* raw entry bytes
 
 `pak` can still read older `PAK1` archives.
