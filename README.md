@@ -51,4 +51,5 @@ By default extraction will not overwrite existing files.
 
 `extract` accepts optional file names. When names are provided, only matching archive entries are extracted.
 Options can appear before or after the command and between positional arguments.
+
 `make` automatically appends `.pak` to the archive name when it is missing.
