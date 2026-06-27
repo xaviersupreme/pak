@@ -10,23 +10,34 @@ static void usage(FILE *out)
     fprintf(out, "usage:\n");
     fprintf(out, "  pak make [options] <archive.pak> <files...>\n");
     fprintf(out, "  pak update [options] <archive.pak> <files...>\n");
-    fprintf(out, "  pak list [options] <archive.pak>\n");
+    fprintf(out, "  pak list [options] <archive.pak> [files...|patterns...]\n");
     fprintf(out, "  pak extract [options] <archive.pak> [files...|patterns...]\n");
     fprintf(out, "  pak unpack [options] <archive.pak> [files...|patterns...]\n");
-    fprintf(out, "  pak cat <archive.pak> <file>\n");
+    fprintf(out, "  pak cat <archive.pak> <file|pattern>\n");
     fprintf(out, "  pak info <archive.pak>\n");
-    fprintf(out, "  pak verify|test <archive.pak>\n");
-    fprintf(out, "\noptions:\n");
+    fprintf(out, "  pak delete <archive.pak> <files...|patterns...>\n");
+    fprintf(out, "  pak rename <archive.pak> <old> <new>\n");
+    fprintf(out, "  pak repack [options] <archive.pak> [files...|patterns...]\n");
+    fprintf(out, "  pak check <archive.pak>\n");
+    fprintf(out, "\nflags are command scoped; they can appear before or after the command.\n");
+    fprintf(out, "\ncompression flags for make/update/repack:\n");
     fprintf(out, "  --compress               compress entries when useful\n");
-    fprintf(out, "  --level <0..10>          set deflate level and enable compression\n");
-    fprintf(out, "  -0 .. -9                 short form for --level\n");
+    fprintf(out, "  --level <0..10>, -0..-9  set deflate level and enable compression\n");
+    fprintf(out, "\nmake/update flags:\n");
     fprintf(out, "  --paths                  keep relative paths\n");
     fprintf(out, "  --exclude <pattern>      skip files while packing\n");
     fprintf(out, "  --no-pakignore           ignore .pakignore\n");
+    fprintf(out, "\nrepack flags:\n");
+    fprintf(out, "  --store                  store entries without compression\n");
+    fprintf(out, "\nlist flags:\n");
     fprintf(out, "  --long                   detailed list output\n");
+    fprintf(out, "  --full-name              show full names and enable long output\n");
+    fprintf(out, "\nextract/unpack flags:\n");
     fprintf(out, "  -C <dir>, -C<dir>        extract into directory\n");
     fprintf(out, "  --overwrite              replace existing files when extracting\n");
     fprintf(out, "  --skip-existing          skip existing files when extracting\n");
+    fprintf(out, "\nglobal flags:\n");
+    fprintf(out, "  -h, --help               show help\n");
     fprintf(out, "  --                       stop parsing options\n");
 }
 
@@ -87,6 +98,7 @@ static void options_init(struct pak_options *opts)
 {
     memset(opts, 0, sizeof(*opts));
     opts->compression_level = PAK_DEFAULT_COMPRESSION_LEVEL;
+    opts->store = 0;
     opts->overwrite_mode = PAK_OVERWRITE_REFUSE;
     opts->use_pakignore = 1;
     opts->option_mask = 0;
@@ -161,6 +173,9 @@ static int parse_args(int argc, char **argv, char **args, int *count, struct pak
         } else if (parsing_options && strcmp(argv[i], "--compress") == 0) {
             opts->compress = 1;
             pak_note_option(opts, PAK_OPT_COMPRESS, argv[i]);
+        } else if (parsing_options && strcmp(argv[i], "--store") == 0) {
+            opts->store = 1;
+            pak_note_option(opts, PAK_OPT_STORE, argv[i]);
         } else if (parsing_options && strcmp(argv[i], "--level") == 0) {
             if (i + 1 >= argc) {
                 hint_missing_option_value("--level", "a number from 0 to 10");
@@ -187,6 +202,10 @@ static int parse_args(int argc, char **argv, char **args, int *count, struct pak
         } else if (parsing_options && strcmp(argv[i], "--long") == 0) {
             opts->long_list = 1;
             pak_note_option(opts, PAK_OPT_LONG, argv[i]);
+        } else if (parsing_options && strcmp(argv[i], "--full-name") == 0) {
+            opts->full_names = 1;
+            opts->long_list = 1;
+            pak_note_option(opts, PAK_OPT_FULL_NAME, argv[i]);
         } else if (parsing_options && strcmp(argv[i], "--exclude") == 0) {
             if (i + 1 >= argc) {
                 hint_missing_option_value("--exclude", "a pattern");
@@ -336,7 +355,7 @@ int main(int argc, char **argv)
             rc = run_write_command(args[0], count, args, &opts);
             break;
         case PAK_CMD_LIST:
-            rc = pak_list(args[1], &opts);
+            rc = pak_list(args[1], count - 2, &args[2], &opts);
             break;
         case PAK_CMD_EXTRACT:
             rc = pak_extract(args[1], count - 2, &args[2], &opts);
@@ -347,8 +366,17 @@ int main(int argc, char **argv)
         case PAK_CMD_INFO:
             rc = pak_info(args[1], &opts);
             break;
-        case PAK_CMD_VERIFY:
-            rc = pak_verify(args[1], &opts);
+        case PAK_CMD_DELETE:
+            rc = pak_delete(args[1], count - 2, &args[2], &opts);
+            break;
+        case PAK_CMD_RENAME:
+            rc = pak_rename(args[1], args[2], args[3], &opts);
+            break;
+        case PAK_CMD_REPACK:
+            rc = pak_repack(args[1], count - 2, &args[2], &opts);
+            break;
+        case PAK_CMD_CHECK:
+            rc = pak_check(args[1], &opts);
             break;
         default:
             diag_error("internal command error");

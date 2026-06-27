@@ -1,6 +1,12 @@
 #ifndef PAK_H
 #define PAK_H
 
+#ifndef _WIN32
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 200809L
+#endif
+#endif
+
 #ifdef _WIN32
 #ifndef _CRT_SECURE_NO_WARNINGS
 #define _CRT_SECURE_NO_WARNINGS
@@ -24,7 +30,10 @@
 #define PAK_CMD_EXTRACT 4
 #define PAK_CMD_CAT 5
 #define PAK_CMD_INFO 6
-#define PAK_CMD_VERIFY 7
+#define PAK_CMD_DELETE 7
+#define PAK_CMD_RENAME 8
+#define PAK_CMD_CHECK 9
+#define PAK_CMD_REPACK 10
 
 #define PAK_OPT_COMPRESS 0x0001u
 #define PAK_OPT_LEVEL 0x0002u
@@ -35,6 +44,8 @@
 #define PAK_OPT_C 0x0040u
 #define PAK_OPT_OVERWRITE 0x0080u
 #define PAK_OPT_SKIP_EXISTING 0x0100u
+#define PAK_OPT_FULL_NAME 0x0200u
+#define PAK_OPT_STORE 0x0400u
 
 #define PAK_CLR_RESET "\033[0m"
 #define PAK_CLR_BOLD "\033[1m"
@@ -65,8 +76,10 @@ struct pak_options {
     int quiet;
     int preserve_paths;
     int compress;
+    int store;
     int compression_level;
     int long_list;
+    int full_names;
     int overwrite_mode;
     int use_pakignore;
     const char *extract_dir;
@@ -88,11 +101,14 @@ struct pak_command_spec {
 
 int pak_make(const char *archive_path, int file_count, char **file_paths, const struct pak_options *opts);
 int pak_update(const char *archive_path, int file_count, char **file_paths, const struct pak_options *opts);
-int pak_list(const char *archive_path, const struct pak_options *opts);
+int pak_list(const char *archive_path, int selected_count, char **selected_names, const struct pak_options *opts);
 int pak_extract(const char *archive_path, int selected_count, char **selected_names, const struct pak_options *opts);
 int pak_cat(const char *archive_path, const char *entry_name, const struct pak_options *opts);
 int pak_info(const char *archive_path, const struct pak_options *opts);
-int pak_verify(const char *archive_path, const struct pak_options *opts);
+int pak_delete(const char *archive_path, int selected_count, char **selected_names, const struct pak_options *opts);
+int pak_rename(const char *archive_path, const char *old_name, const char *new_name, const struct pak_options *opts);
+int pak_check(const char *archive_path, const struct pak_options *opts);
+int pak_repack(const char *archive_path, int selected_count, char **selected_names, const struct pak_options *opts);
 
 int io_file_size(const char *path, uint64_t *size);
 int io_file_exists(const char *path);
@@ -130,14 +146,18 @@ void diag_hint(const char *fmt, ...);
 void diag_known(const char *fmt, ...);
 void diag_try(const char *fmt, ...);
 void diag_or(const char *fmt, ...);
+void diag_set_suppressed(int suppressed);
+int diag_is_suppressed(void);
 void diag_error_start(void);
 void diag_hint_start(void);
 void diag_known_start(void);
 void diag_try_start(void);
+void diag_or_start(void);
 void diag_placeholder(const char *text);
 void log_step(const struct pak_options *opts, const char *fmt, ...);
 void log_item(const struct pak_options *opts, int index, int total, const char *fmt, ...);
 void log_progress(const struct pak_options *opts, const char *name, uint64_t done, uint64_t total, int force);
+void log_count_progress(const struct pak_options *opts, const char *name, uint64_t done, uint64_t total, int force);
 
 uint32_t crc32_start(void);
 uint32_t crc32_update(uint32_t crc, const unsigned char *buf, size_t size);

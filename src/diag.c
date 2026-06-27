@@ -2,6 +2,8 @@
 
 #include <stdarg.h>
 
+static int diagnostics_suppressed;
+
 static void diag_color(const char *code)
 {
     fputs(pak_clr(stderr, code), stderr);
@@ -18,9 +20,23 @@ static void diag_label(const char *label, const char *color)
 
 static void diag_vline(const char *label, const char *color, const char *fmt, va_list ap)
 {
+    if (diagnostics_suppressed) {
+        return;
+    }
+
     diag_label(label, color);
     vfprintf(stderr, fmt, ap);
     fputc('\n', stderr);
+}
+
+void diag_set_suppressed(int suppressed)
+{
+    diagnostics_suppressed = suppressed;
+}
+
+int diag_is_suppressed(void)
+{
+    return diagnostics_suppressed;
 }
 
 void diag_error(const char *fmt, ...)
@@ -86,6 +102,11 @@ void diag_known_start(void)
 void diag_try_start(void)
 {
     diag_label("try:", PAK_CLR_GREEN);
+}
+
+void diag_or_start(void)
+{
+    diag_label("or:", PAK_CLR_DIM);
 }
 
 void diag_placeholder(const char *text)

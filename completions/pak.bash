@@ -5,7 +5,7 @@ _pak()
     prev="${COMP_WORDS[COMP_CWORD-1]}"
 
     if [[ $COMP_CWORD -eq 1 ]]; then
-        COMPREPLY=( $(compgen -W "make update list extract unpack cat info verify test --help" -- "$cur") )
+        COMPREPLY=( $(compgen -W "make update list extract unpack cat info delete rename repack check --help" -- "$cur") )
         return
     fi
 
@@ -21,17 +21,20 @@ _pak()
         make|update)
             COMPREPLY=( $(compgen -W "--compress --level --paths --exclude --no-pakignore --" -- "$cur") $(compgen -f -- "$cur") )
             ;;
+        repack)
+            COMPREPLY=( $(compgen -W "--compress --level --store" -- "$cur") $(compgen -f -- "$cur") )
+            ;;
         list)
-            COMPREPLY=( $(compgen -W "--long" -- "$cur") $(compgen -f -- "$cur") )
+            COMPREPLY=( $(compgen -W "--long --full-name" -- "$cur") $(compgen -f -- "$cur") )
             ;;
         extract|unpack)
             COMPREPLY=( $(compgen -W "-C --overwrite --skip-existing" -- "$cur") $(compgen -f -- "$cur") )
             ;;
-        cat|info|verify|test)
+        cat|info|delete|rename|check)
             COMPREPLY=( $(compgen -f -- "$cur") )
             ;;
         *)
-            COMPREPLY=( $(compgen -W "make update list extract unpack cat info verify test" -- "$cur") )
+            COMPREPLY=( $(compgen -W "make update list extract unpack cat info delete rename repack check" -- "$cur") )
             ;;
     esac
 }

@@ -4,13 +4,23 @@
 
 Use it for asset packs, tools, configs, test fixtures, and simple project data.
 
+<p align="left">
+  <img src="https://img.shields.io/github/v/release/xaviersupreme/pak" />
+  <img src="https://img.shields.io/github/license/xaviersupreme/pak" />
+  <img src="https://img.shields.io/github/stars/xaviersupreme/pak" />
+  <img src="https://img.shields.io/github/issues/xaviersupreme/pak" />
+  <img src="https://img.shields.io/github/last-commit/xaviersupreme/pak" />
+  <img src="https://img.shields.io/github/languages/top/xaviersupreme/pak" />
+</p>
+
+
 ## build
 
 ```sh
 make
 ```
 
-Windows fallback:
+Windows fallback w/o make:
 
 ```powershell
 .\make.ps1
@@ -36,12 +46,14 @@ pak unpack assets.pak -C out
 pak make [options] <archive> <files...>
 pak make [options] <archive> <dirs...>
 pak update [options] <archive> <files...>
-pak list [--long] <archive.pak>
+pak list [--long] [--full-name] <archive.pak> [files...|patterns...]
 pak unpack|extract [options] <archive.pak> [files...|patterns...]
-pak cat <archive.pak> <file>
+pak cat <archive.pak> <file|pattern>
 pak info <archive.pak>
-pak verify <archive.pak>
-pak test <archive.pak>
+pak delete <archive.pak> <files...|patterns...>
+pak rename <archive.pak> <old> <new>
+pak repack [options] <archive.pak> [files...|patterns...]
+pak check <archive.pak>
 ```
 
 ## examples
@@ -52,12 +64,26 @@ pak make --compress --level 9 assets assets/
 pak make --paths game assets/sprites/player.png assets/audio/jump.wav
 pak make assets . --exclude "*.o"
 pak update assets.pak config.txt
+pak update assets.pak "*.c"
+pak update assets.pak "**/*.c"
+
 pak list --long assets.pak
+pak list --long --full-name assets.pak
+pak list assets.pak "*.png"
+
 pak unpack assets.pak "*.png" -C out
 pak unpack assets.pak config.txt -C out
 pak unpack --overwrite assets.pak -C out
+
 pak cat assets.pak config.txt
-pak test assets.pak
+pak delete assets.pak "*.tmp"
+pak rename assets.pak config.txt config/default.txt
+
+pak repack assets.pak
+pak repack assets.pak "*.json" --level 9
+pak repack assets.pak "*.wav" --store
+
+pak check assets.pak
 ```
 
 Use `--` when a filename starts with `-`:
@@ -68,11 +94,19 @@ pak make weird -- -dash.txt
 
 ## options
 
+Flags are command scoped. They can appear before or after the command, but pak rejects flags that do not belong to that command.
+
+### compression
+
 `--compress`
-: Use deflate through miniz when it makes an entry smaller. RLE is still tried and used when it wins.
+: Use deflate through miniz when it makes an entry smaller. RLE is still tried and used when it wins. Works with `make`, `update`, and `repack`. `repack` uses this behavior by default.
 
 `--level N`
 : Set deflate level from `0` to `10`. This also turns on compression. Short forms `-0` through `-9` work too.
+
+### make/update
+
+Input paths may use `*`, `?`, and recursive `**`. Quote them when you want pak to expand the match itself, which is useful on Windows. `*.c` matches the current directory. `**/*.c` matches subdirectories too.
 
 `--paths`
 : Store relative paths instead of only base names.
@@ -83,8 +117,20 @@ pak make weird -- -dash.txt
 `--no-pakignore`
 : Do not read `.pakignore`.
 
+### repack
+
+`--store`
+: Rewrite matching entries without compression.
+
+### list
+
 `--long`
-: Show readable sizes, stored size, ratio, method, and CRC32 in `list`.
+: Show readable sizes, stored size, ratio, method, and CRC32 in `list`. Long names are shortened by default.
+
+`--full-name`
+: Show full entry names in `list --long`. This also enables long output.
+
+### extract/unpack
 
 `-C dir`
 : Unpack into `dir`.
@@ -95,6 +141,8 @@ pak make weird -- -dash.txt
 `--skip-existing`
 : Leave existing files alone.
 
+### global
+
 `--`
 : Stop option parsing.
 
@@ -102,15 +150,13 @@ pak make weird -- -dash.txt
 
 By default, unpacking refuses to overwrite files.
 
-`extract` and `unpack` accept optional file names or wildcard patterns. Quote wildcard patterns in shells.
-
-Options can appear before or after the command and between positional arguments.
+`list`, `extract`, `unpack`, and `delete` accept optional file names or wildcard patterns. `cat` can use a wildcard pattern when it matches exactly one file. Quote wildcard patterns in shells.
 
 When a directory is passed to `make`, pak walks it recursively and stores paths for the files inside it. Files are written in archive name order, so the same inputs make the same archive bytes.
 
 ## .pakignore
 
-`make` and `update` read `.pakignore` from the current directory. Blank lines are ignored. Lines that start with `#` are comments.
+`make` and `update` read `.pakignore` from the current directory. Blank lines are ignored. Lines that start with `#` are comments. They're just gitignore in disguise.
 
 ```gitignore
 *.o
@@ -134,3 +180,27 @@ Each entry stores:
 * raw entry bytes
 
 `pak` can still read older `PAK1` archives.
+
+## fuzzing (for development)
+
+Simple smoke test:
+
+```sh
+make fuzz
+```
+
+Seeded LLVM libFuzzer run:
+
+```sh
+make fuzz-run
+```
+
+Useful variables:
+
+```sh
+make fuzz FUZZ_ITERS=100000
+make fuzz-run-libfuzzer FUZZ_CC=clang FUZZ_SANITIZERS=fuzzer,address
+./fuzz/bin/archive_fuzz fuzz/corpus/archive -max_total_time=300
+```
+
+On Windows, `FUZZ_SANITIZERS=fuzzer` is the normal. On Linux or macOS, `fuzzer,address` is the normal.

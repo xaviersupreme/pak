@@ -189,3 +189,54 @@ void log_progress(const struct pak_options *opts, const char *name, uint64_t don
     }
     fflush(stdout);
 }
+
+void log_count_progress(const struct pak_options *opts, const char *name, uint64_t done, uint64_t total, int force)
+{
+    static char last_name[256];
+    static int last_percent = -1;
+    int width;
+    int tenth;
+    int percent;
+    int filled;
+    int i;
+
+    if (opts != NULL && opts->quiet) {
+        return;
+    }
+
+    if (strncmp(last_name, name, sizeof(last_name)) != 0) {
+        snprintf(last_name, sizeof(last_name), "%s", name);
+        last_percent = -1;
+    }
+
+    tenth = total == 0 ? 1000 : (int)((done * 1000) / total);
+    if (tenth > 1000) {
+        tenth = 1000;
+    }
+    percent = tenth / 10;
+
+    if (!force && last_percent >= 0 && percent < last_percent + 5) {
+        return;
+    }
+    if (!force && percent == last_percent) {
+        return;
+    }
+
+    last_percent = percent;
+    width = 28;
+    filled = (tenth * width) / 1000;
+
+    printf("\r      %s[", clr(PAK_CLR_GREEN));
+    for (i = 0; i < width; i++) {
+        if (i == 0 || i == filled) {
+            fputs(i < filled ? clr(PAK_CLR_GREEN) : clr(PAK_CLR_DIM), stdout);
+        }
+        putchar(i < filled ? '#' : '-');
+    }
+    printf("%s]%s %s%3d%%%s  %s%llu%s/%s%llu%s", clr(PAK_CLR_GREEN), clr(PAK_CLR_RESET), clr(percent == 100 ? PAK_CLR_GREEN : PAK_CLR_YELLOW), percent, clr(PAK_CLR_RESET), clr(PAK_CLR_BOLD), (unsigned long long)done, clr(PAK_CLR_RESET), clr(PAK_CLR_DIM), (unsigned long long)total, clr(PAK_CLR_RESET));
+
+    if (force) {
+        putchar('\n');
+    }
+    fflush(stdout);
+}
