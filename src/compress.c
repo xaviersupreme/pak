@@ -162,7 +162,7 @@ int rle_decompress(FILE *in, FILE *out, uint64_t in_size, uint64_t out_size, uin
     return wrote_total == out_size ? 0 : -1;
 }
 
-int deflate_compress(const unsigned char *in, size_t in_size, unsigned char **out, size_t *out_size)
+int deflate_compress(const unsigned char *in, size_t in_size, int level, unsigned char **out, size_t *out_size)
 {
     mz_ulong bound;
     mz_ulong dest_len;
@@ -179,7 +179,7 @@ int deflate_compress(const unsigned char *in, size_t in_size, unsigned char **ou
     }
 
     dest_len = bound;
-    if (mz_compress2(buf, &dest_len, in, (mz_ulong)in_size, MZ_DEFAULT_COMPRESSION) != MZ_OK) {
+    if (mz_compress2(buf, &dest_len, in, (mz_ulong)in_size, level) != MZ_OK) {
         free(buf);
         return -1;
     }

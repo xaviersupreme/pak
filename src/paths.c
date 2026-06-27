@@ -206,16 +206,16 @@ int path_list_add_inputs(struct path_list *list, int input_count, char **inputs,
         if (path_is_directory(inputs[i])) {
             *saw_directory = 1;
             if (collect_directory(list, inputs[i]) != 0) {
-                fprintf(stderr, "pak: cannot read directory '%s': %s\n", inputs[i], strerror(errno));
+                diag_error("cannot read directory '%s': %s", inputs[i], strerror(errno));
                 return -1;
             }
         } else if (path_is_file(inputs[i])) {
             if (path_list_add(list, inputs[i]) != 0) {
-                fprintf(stderr, "pak: out of memory\n");
+                diag_error("out of memory");
                 return -1;
             }
         } else {
-            fprintf(stderr, "pak: cannot pack '%s': not a regular file or directory\n", inputs[i]);
+            diag_error("cannot pack '%s': not a regular file or directory", inputs[i]);
             return -1;
         }
     }

@@ -16,7 +16,7 @@ CFLAGS ?= -std=c11 -Wall -Wextra -pedantic -O2
 LDFLAGS ?=
 CPPFLAGS ?= -Iinclude -Ivendor/miniz
 
-SRC = src/main.c src/archive.c src/io.c src/paths.c src/log.c src/endian.c src/crc.c src/compress.c vendor/miniz/miniz.c vendor/miniz/miniz_tdef.c vendor/miniz/miniz_tinfl.c
+SRC = src/main.c src/archive.c src/io.c src/paths.c src/log.c src/diag.c src/endian.c src/crc.c src/compress.c src/pattern.c src/hints.c vendor/miniz/miniz.c vendor/miniz/miniz_tdef.c vendor/miniz/miniz_tinfl.c
 OBJ = $(SRC:.c=.o)
 BIN = pak
 

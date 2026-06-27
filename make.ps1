@@ -15,5 +15,5 @@ if ($null -eq $cc) {
 
 & $cc -std=c11 -Wall -Wextra -pedantic -O2 `
     -Iinclude -Ivendor/miniz `
-    src/main.c src/archive.c src/io.c src/paths.c src/log.c src/endian.c src/crc.c src/compress.c vendor/miniz/miniz.c vendor/miniz/miniz_tdef.c vendor/miniz/miniz_tinfl.c `
+    src/main.c src/archive.c src/io.c src/paths.c src/log.c src/diag.c src/endian.c src/crc.c src/compress.c src/pattern.c src/hints.c vendor/miniz/miniz.c vendor/miniz/miniz_tdef.c vendor/miniz/miniz_tinfl.c `
     -o pak.exe

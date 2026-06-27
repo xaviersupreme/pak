@@ -1,0 +1,12 @@
+complete -c pak -f -n __fish_use_subcommand -a 'make update list extract unpack cat info verify test'
+complete -c pak -f -n __fish_use_subcommand -s h -l help -d 'show help'
+
+complete -c pak -n '__fish_seen_subcommand_from make update' -l compress -d 'compress entries when useful'
+complete -c pak -n '__fish_seen_subcommand_from make update' -l level -x -a '0 1 2 3 4 5 6 7 8 9 10' -d 'set deflate level'
+complete -c pak -n '__fish_seen_subcommand_from make update' -l paths -d 'keep relative paths'
+complete -c pak -n '__fish_seen_subcommand_from make update' -l exclude -x -d 'skip pattern'
+complete -c pak -n '__fish_seen_subcommand_from make update' -l no-pakignore -d 'do not read .pakignore'
+complete -c pak -n '__fish_seen_subcommand_from list' -l long -d 'detailed list output'
+complete -c pak -n '__fish_seen_subcommand_from extract unpack' -s C -r -d 'extract into directory'
+complete -c pak -n '__fish_seen_subcommand_from extract unpack' -l overwrite -d 'replace existing files'
+complete -c pak -n '__fish_seen_subcommand_from extract unpack' -l skip-existing -d 'skip existing files'

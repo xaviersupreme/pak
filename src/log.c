@@ -8,18 +8,11 @@
 #ifdef _WIN32
 #include <io.h>
 #include <windows.h>
-#define is_stdout_tty() _isatty(_fileno(stdout))
+#define is_stream_tty(stream) _isatty(_fileno(stream))
 #else
 #include <unistd.h>
-#define is_stdout_tty() isatty(fileno(stdout))
+#define is_stream_tty(stream) isatty(fileno(stream))
 #endif
-
-#define CLR_RESET "\033[0m"
-#define CLR_DIM "\033[2m"
-#define CLR_CYAN "\033[36m"
-#define CLR_GREEN "\033[32m"
-#define CLR_YELLOW "\033[33m"
-#define CLR_BOLD "\033[1m"
 
 static void format_size(uint64_t bytes, char *buf, size_t buf_size)
 {
@@ -32,54 +25,74 @@ static void format_size(uint64_t bytes, char *buf, size_t buf_size)
     }
 }
 
-static int color_enabled(void)
+#ifdef _WIN32
+static int enable_virtual_terminal(FILE *stream)
 {
-    static int cached = -1;
+    HANDLE out = GetStdHandle(stream == stderr ? STD_ERROR_HANDLE : STD_OUTPUT_HANDLE);
+    DWORD mode;
+
+    if (out == INVALID_HANDLE_VALUE || !GetConsoleMode(out, &mode)) {
+        return 0;
+    }
+    if (!SetConsoleMode(out, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING)) {
+        return 0;
+    }
+    return 1;
+}
+#endif
+
+static int color_enabled(FILE *stream)
+{
+    static int stdout_cached = -1;
+    static int stderr_cached = -1;
+    int *cached = stream == stderr ? &stderr_cached : &stdout_cached;
     const char *term;
 
-    if (cached != -1) {
-        return cached;
+    if (*cached != -1) {
+        return *cached;
     }
 
     if (getenv("FORCE_COLOR") != NULL) {
-        cached = 1;
-        return cached;
+#ifdef _WIN32
+        enable_virtual_terminal(stream);
+#endif
+        *cached = 1;
+        return *cached;
     }
     if (getenv("NO_COLOR") != NULL) {
-        cached = 0;
-        return cached;
+        *cached = 0;
+        return *cached;
     }
-    if (!is_stdout_tty()) {
-        cached = 0;
-        return cached;
+    if (!is_stream_tty(stream)) {
+        *cached = 0;
+        return *cached;
     }
 
     term = getenv("TERM");
     if (term != NULL && strcmp(term, "dumb") == 0) {
-        cached = 0;
-        return cached;
+        *cached = 0;
+        return *cached;
     }
 
 #ifdef _WIN32
-    {
-        HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
-        DWORD mode;
-
-        if (out == INVALID_HANDLE_VALUE || !GetConsoleMode(out, &mode)) {
-            cached = 0;
-            return cached;
-        }
-        SetConsoleMode(out, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+    if (!enable_virtual_terminal(stream)) {
+        *cached = 0;
+        return *cached;
     }
 #endif
 
-    cached = 1;
-    return cached;
+    *cached = 1;
+    return *cached;
+}
+
+const char *pak_clr(FILE *stream, const char *code)
+{
+    return color_enabled(stream) ? code : "";
 }
 
 static const char *clr(const char *code)
 {
-    return color_enabled() ? code : "";
+    return pak_clr(stdout, code);
 }
 
 static void vlog_line(const struct pak_options *opts, const char *prefix, const char *fmt, va_list ap)
@@ -88,9 +101,9 @@ static void vlog_line(const struct pak_options *opts, const char *prefix, const 
         return;
     }
 
-    fputs(clr(CLR_CYAN), stdout);
+    fputs(clr(PAK_CLR_CYAN), stdout);
     fputs(prefix, stdout);
-    fputs(clr(CLR_RESET), stdout);
+    fputs(clr(PAK_CLR_RESET), stdout);
     vfprintf(stdout, fmt, ap);
     fputc('\n', stdout);
 }
@@ -112,12 +125,12 @@ void log_item(const struct pak_options *opts, int index, int total, const char *
         return;
     }
 
-    printf("  %s%d/%d%s  ", clr(CLR_DIM), index, total, clr(CLR_RESET));
-    fputs(clr(CLR_BOLD), stdout);
+    printf("  %s%d/%d%s  ", clr(PAK_CLR_DIM), index, total, clr(PAK_CLR_RESET));
+    fputs(clr(PAK_CLR_BOLD), stdout);
     va_start(ap, fmt);
     vfprintf(stdout, fmt, ap);
     va_end(ap);
-    fputs(clr(CLR_RESET), stdout);
+    fputs(clr(PAK_CLR_RESET), stdout);
     fputc('\n', stdout);
 }
 
@@ -162,14 +175,14 @@ void log_progress(const struct pak_options *opts, const char *name, uint64_t don
     format_size(done, done_buf, sizeof(done_buf));
     format_size(total, total_buf, sizeof(total_buf));
 
-    printf("\r      %s[", clr(CLR_GREEN));
+    printf("\r      %s[", clr(PAK_CLR_GREEN));
     for (i = 0; i < width; i++) {
         if (i == 0 || i == filled) {
-            fputs(i < filled ? clr(CLR_GREEN) : clr(CLR_DIM), stdout);
+            fputs(i < filled ? clr(PAK_CLR_GREEN) : clr(PAK_CLR_DIM), stdout);
         }
         putchar(i < filled ? '#' : '-');
     }
-    printf("%s]%s %s%3d%%%s  %s%s%s/%s%s%s", clr(CLR_GREEN), clr(CLR_RESET), clr(percent == 100 ? CLR_GREEN : CLR_YELLOW), percent, clr(CLR_RESET), clr(CLR_BOLD), done_buf, clr(CLR_RESET), clr(CLR_DIM), total_buf, clr(CLR_RESET));
+    printf("%s]%s %s%3d%%%s  %s%s%s/%s%s%s", clr(PAK_CLR_GREEN), clr(PAK_CLR_RESET), clr(percent == 100 ? PAK_CLR_GREEN : PAK_CLR_YELLOW), percent, clr(PAK_CLR_RESET), clr(PAK_CLR_BOLD), done_buf, clr(PAK_CLR_RESET), clr(PAK_CLR_DIM), total_buf, clr(PAK_CLR_RESET));
 
     if (force) {
         putchar('\n');

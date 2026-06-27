@@ -1,5 +1,6 @@
 #include "pak.h"
 
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -8,15 +9,20 @@ static void usage(FILE *out)
 {
     fprintf(out, "usage:\n");
     fprintf(out, "  pak make [options] <archive.pak> <files...>\n");
+    fprintf(out, "  pak update [options] <archive.pak> <files...>\n");
     fprintf(out, "  pak list [options] <archive.pak>\n");
-    fprintf(out, "  pak extract [options] <archive.pak> [files...]\n");
-    fprintf(out, "  pak unpack [options] <archive.pak> [files...]\n");
+    fprintf(out, "  pak extract [options] <archive.pak> [files...|patterns...]\n");
+    fprintf(out, "  pak unpack [options] <archive.pak> [files...|patterns...]\n");
     fprintf(out, "  pak cat <archive.pak> <file>\n");
     fprintf(out, "  pak info <archive.pak>\n");
     fprintf(out, "  pak verify|test <archive.pak>\n");
     fprintf(out, "\noptions:\n");
     fprintf(out, "  --compress               compress entries when useful\n");
+    fprintf(out, "  --level <0..10>          set deflate level and enable compression\n");
+    fprintf(out, "  -0 .. -9                 short form for --level\n");
     fprintf(out, "  --paths                  keep relative paths\n");
+    fprintf(out, "  --exclude <pattern>      skip files while packing\n");
+    fprintf(out, "  --no-pakignore           ignore .pakignore\n");
     fprintf(out, "  --long                   detailed list output\n");
     fprintf(out, "  -C <dir>, -C<dir>        extract into directory\n");
     fprintf(out, "  --overwrite              replace existing files when extracting\n");
@@ -27,11 +33,6 @@ static void usage(FILE *out)
 static int is_help_flag(const char *arg)
 {
     return strcmp(arg, "-h") == 0 || strcmp(arg, "--help") == 0;
-}
-
-static int is_command(const char *arg)
-{
-    return strcmp(arg, "make") == 0 || strcmp(arg, "list") == 0 || strcmp(arg, "extract") == 0 || strcmp(arg, "unpack") == 0 || strcmp(arg, "cat") == 0 || strcmp(arg, "info") == 0 || strcmp(arg, "verify") == 0 || strcmp(arg, "test") == 0;
 }
 
 static int push_arg(char **args, int *count, char *arg)
@@ -82,10 +83,62 @@ static char *make_archive_path(const char *path)
     return out;
 }
 
-static void wrong_args(const char *command, const char *problem, const char *example)
+static void options_init(struct pak_options *opts)
 {
-    fprintf(stderr, "pak: %s: %s\n", command, problem);
-    fprintf(stderr, "try: %s\n", example);
+    memset(opts, 0, sizeof(*opts));
+    opts->compression_level = PAK_DEFAULT_COMPRESSION_LEVEL;
+    opts->overwrite_mode = PAK_OVERWRITE_REFUSE;
+    opts->use_pakignore = 1;
+    opts->option_mask = 0;
+    opts->seen_option_count = 0;
+    pattern_list_init(&opts->exclude_patterns);
+}
+
+static void options_free(struct pak_options *opts)
+{
+    pattern_list_free(&opts->exclude_patterns);
+}
+
+static int parse_level_value(const char *value, int *level)
+{
+    char *end;
+    long number;
+
+    if (value == NULL || value[0] == '\0') {
+        return -1;
+    }
+
+    errno = 0;
+    number = strtol(value, &end, 10);
+    if (errno != 0 || *end != '\0' || number < 0 || number > 10) {
+        return -1;
+    }
+
+    *level = (int)number;
+    return 0;
+}
+
+static int set_compression_level(struct pak_options *opts, const char *value)
+{
+    int level;
+
+    if (parse_level_value(value, &level) != 0) {
+        hint_bad_compression_level(value);
+        return -1;
+    }
+
+    opts->compress = 1;
+    opts->compression_level = level;
+    return 0;
+}
+
+static int add_exclude_pattern(struct pak_options *opts, const char *pattern)
+{
+    if (pattern_list_add(&opts->exclude_patterns, pattern) != 0) {
+        diag_error("could not add exclude pattern '%s'", pattern);
+        return -1;
+    }
+    return 0;
 }
 
 static int parse_args(int argc, char **argv, char **args, int *count, struct pak_options *opts)
@@ -97,35 +150,81 @@ static int parse_args(int argc, char **argv, char **args, int *count, struct pak
     command = NULL;
     parsing_options = 1;
     *count = 0;
-    memset(opts, 0, sizeof(*opts));
-    opts->overwrite_mode = PAK_OVERWRITE_REFUSE;
+    options_init(opts);
 
     for (i = 1; i < argc; i++) {
         if (parsing_options && strcmp(argv[i], "--") == 0) {
             parsing_options = 0;
         } else if (parsing_options && strcmp(argv[i], "--paths") == 0) {
             opts->preserve_paths = 1;
+            pak_note_option(opts, PAK_OPT_PATHS, argv[i]);
         } else if (parsing_options && strcmp(argv[i], "--compress") == 0) {
             opts->compress = 1;
-        } else if (parsing_options && strcmp(argv[i], "--long") == 0) {
-            opts->long_list = 1;
-        } else if (parsing_options && strcmp(argv[i], "--overwrite") == 0) {
-            opts->overwrite_mode = PAK_OVERWRITE_REPLACE;
-        } else if (parsing_options && strcmp(argv[i], "--skip-existing") == 0) {
-            opts->overwrite_mode = PAK_OVERWRITE_SKIP;
-        } else if (parsing_options && strcmp(argv[i], "-C") == 0) {
+            pak_note_option(opts, PAK_OPT_COMPRESS, argv[i]);
+        } else if (parsing_options && strcmp(argv[i], "--level") == 0) {
             if (i + 1 >= argc) {
-                fprintf(stderr, "pak: -C needs a directory\n");
+                hint_missing_option_value("--level", "a number from 0 to 10");
                 return -1;
             }
+            pak_note_option(opts, PAK_OPT_LEVEL, argv[i]);
+            if (set_compression_level(opts, argv[++i]) != 0) {
+                return -1;
+            }
+        } else if (parsing_options && strncmp(argv[i], "--level=", 8) == 0) {
+            pak_note_option(opts, PAK_OPT_LEVEL, "--level");
+            if (set_compression_level(opts, argv[i] + 8) != 0) {
+                return -1;
+            }
+        } else if (parsing_options && argv[i][0] == '-' && argv[i][1] >= '0' && argv[i][1] <= '9' && argv[i][2] == '\0') {
+            char level[2];
+
+            level[0] = argv[i][1];
+            level[1] = '\0';
+            pak_note_option(opts, PAK_OPT_LEVEL, argv[i]);
+            if (set_compression_level(opts, level) != 0) {
+                return -1;
+            }
+        } else if (parsing_options && strcmp(argv[i], "--long") == 0) {
+            opts->long_list = 1;
+            pak_note_option(opts, PAK_OPT_LONG, argv[i]);
+        } else if (parsing_options && strcmp(argv[i], "--exclude") == 0) {
+            if (i + 1 >= argc) {
+                hint_missing_option_value("--exclude", "a pattern");
+                return -1;
+            }
+            pak_note_option(opts, PAK_OPT_EXCLUDE, argv[i]);
+            if (add_exclude_pattern(opts, argv[++i]) != 0) {
+                return -1;
+            }
+        } else if (parsing_options && strncmp(argv[i], "--exclude=", 10) == 0) {
+            pak_note_option(opts, PAK_OPT_EXCLUDE, "--exclude");
+            if (add_exclude_pattern(opts, argv[i] + 10) != 0) {
+                return -1;
+            }
+        } else if (parsing_options && strcmp(argv[i], "--no-pakignore") == 0) {
+            opts->use_pakignore = 0;
+            pak_note_option(opts, PAK_OPT_NO_PAKIGNORE, argv[i]);
+        } else if (parsing_options && strcmp(argv[i], "--overwrite") == 0) {
+            opts->overwrite_mode = PAK_OVERWRITE_REPLACE;
+            pak_note_option(opts, PAK_OPT_OVERWRITE, argv[i]);
+        } else if (parsing_options && strcmp(argv[i], "--skip-existing") == 0) {
+            opts->overwrite_mode = PAK_OVERWRITE_SKIP;
+            pak_note_option(opts, PAK_OPT_SKIP_EXISTING, argv[i]);
+        } else if (parsing_options && strcmp(argv[i], "-C") == 0) {
+            if (i + 1 >= argc) {
+                hint_missing_option_value("-C", "a directory");
+                return -1;
+            }
+            pak_note_option(opts, PAK_OPT_C, argv[i]);
             opts->extract_dir = argv[++i];
         } else if (parsing_options && strncmp(argv[i], "-C", 2) == 0 && argv[i][2] != '\0') {
+            pak_note_option(opts, PAK_OPT_C, "-C");
             opts->extract_dir = argv[i] + 2;
-        } else if (command == NULL && is_command(argv[i])) {
+        } else if (command == NULL && pak_command_spec(argv[i]) != NULL) {
             command = argv[i];
             push_arg(args, count, argv[i]);
         } else if (parsing_options && argv[i][0] == '-') {
-            fprintf(stderr, "pak: unknown option '%s'\n", argv[i]);
+            hint_unknown_option(argv[i], argc, argv, i);
             return -1;
         } else {
             push_arg(args, count, argv[i]);
@@ -135,8 +234,64 @@ static int parse_args(int argc, char **argv, char **args, int *count, struct pak
     return 0;
 }
 
+static int load_pakignore(struct pak_options *opts)
+{
+    if (!opts->use_pakignore) {
+        return 0;
+    }
+    if (pattern_list_load_file(&opts->exclude_patterns, ".pakignore") != 0) {
+        diag_error(".pakignore: %s", strerror(errno));
+        return -1;
+    }
+    return 0;
+}
+
+static int run_write_command(const char *command, int count, char **args, struct pak_options *opts)
+{
+    struct path_list files;
+    struct pak_options write_opts;
+    char *archive_path;
+    int saw_directory;
+    int rc;
+
+    if (count < 3) {
+        diag_error("internal command error");
+        return 1;
+    }
+
+    archive_path = make_archive_path(args[1]);
+    if (archive_path == NULL) {
+        diag_error("out of memory");
+        return 1;
+    }
+
+    if (load_pakignore(opts) != 0) {
+        free(archive_path);
+        return 1;
+    }
+
+    rc = 1;
+    path_list_init(&files);
+    if (path_list_add_inputs(&files, count - 2, &args[2], &saw_directory) == 0) {
+        write_opts = *opts;
+        if (saw_directory) {
+            write_opts.preserve_paths = 1;
+        }
+        if (strcmp(command, "make") == 0) {
+            rc = pak_make(archive_path, files.count, files.items, &write_opts) == 0 ? 0 : 1;
+        } else {
+            rc = pak_update(archive_path, files.count, files.items, &write_opts) == 0 ? 0 : 1;
+        }
+    }
+
+    path_list_free(&files);
+    free(archive_path);
+    return rc;
+}
+
 int main(int argc, char **argv)
 {
+    const struct pak_command_spec *spec;
     struct pak_options opts;
     char **args;
     int count;
@@ -152,97 +307,57 @@ int main(int argc, char **argv)
 
     args = calloc((size_t)argc, sizeof(*args));
     if (args == NULL) {
-        fprintf(stderr, "pak: out of memory\n");
+        diag_error("out of memory");
         return 1;
     }
 
     if (parse_args(argc, argv, args, &count, &opts) != 0) {
+        options_free(&opts);
         free(args);
         return 1;
     }
     if (count == 0) {
-        fprintf(stderr, "pak: no command given\n");
-        fprintf(stderr, "try: pak --help\n");
+        hint_no_command(argc, argv, &opts);
+        options_free(&opts);
         free(args);
         return 1;
     }
 
-    if (strcmp(args[0], "make") == 0) {
-        if (count < 3) {
-            if (count == 1) {
-                wrong_args("make", "missing archive name and input files", "pak make assets image.png sound.wav");
-            } else {
-                wrong_args("make", "missing input files", "pak make assets.pak image.png sound.wav");
-            }
-            rc = 1;
-        } else {
-            char *archive_path = make_archive_path(args[1]);
-
-            if (archive_path == NULL) {
-                fprintf(stderr, "pak: out of memory\n");
-                rc = 1;
-            } else {
-                struct path_list files;
-                struct pak_options make_opts = opts;
-                int saw_directory;
-
-                path_list_init(&files);
-                if (path_list_add_inputs(&files, count - 2, &args[2], &saw_directory) != 0) {
-                    rc = 1;
-                } else {
-                    if (saw_directory) {
-                        make_opts.preserve_paths = 1;
-                    }
-                    rc = pak_make(archive_path, files.count, files.items, &make_opts);
-                }
-                path_list_free(&files);
-                free(archive_path);
-            }
-        }
-    } else if (strcmp(args[0], "list") == 0) {
-        if (count == 2) {
-            rc = pak_list(args[1], &opts);
-        } else {
-            wrong_args("list", count < 2 ? "missing archive name" : "too many arguments", "pak list assets.pak");
-            rc = 1;
-        }
-    } else if (strcmp(args[0], "extract") == 0 || strcmp(args[0], "unpack") == 0) {
-        if (count >= 2) {
-            rc = pak_extract(args[1], count - 2, &args[2], &opts);
-        } else {
-            wrong_args(args[0], "missing archive name", "pak unpack assets.pak -C out");
-            rc = 1;
-        }
-    } else if (strcmp(args[0], "cat") == 0) {
-        if (count == 3) {
-            rc = pak_cat(args[1], args[2], &opts);
-        } else if (count < 3) {
-            wrong_args("cat", count < 2 ? "missing archive name and file name" : "missing file name", "pak cat assets.pak config.txt");
-            rc = 1;
-        } else {
-            wrong_args("cat", "too many arguments", "pak cat assets.pak config.txt");
-            rc = 1;
-        }
-    } else if (strcmp(args[0], "info") == 0) {
-        if (count == 2) {
-            rc = pak_info(args[1], &opts);
-        } else {
-            wrong_args("info", count < 2 ? "missing archive name" : "too many arguments", "pak info assets.pak");
-            rc = 1;
-        }
-    } else if (strcmp(args[0], "verify") == 0 || strcmp(args[0], "test") == 0) {
-        if (count == 2) {
-            rc = pak_verify(args[1], &opts);
-        } else {
-            wrong_args(args[0], count < 2 ? "missing archive name" : "too many arguments", "pak test assets.pak");
-            rc = 1;
-        }
-    } else {
-        fprintf(stderr, "pak: unknown command '%s'\n", args[0]);
-        fprintf(stderr, "known: make, list, extract, unpack, cat, info, verify, test\n");
+    spec = pak_command_spec(args[0]);
+    if (spec == NULL) {
+        hint_unknown_command(argc, argv, count, args, &opts);
         rc = 1;
+    } else if (hint_validate_command(spec, argc, argv, count, args, &opts) != 0) {
+        rc = 1;
+    } else {
+        switch (spec->id) {
+        case PAK_CMD_MAKE:
+        case PAK_CMD_UPDATE:
+            rc = run_write_command(args[0], count, args, &opts);
+            break;
+        case PAK_CMD_LIST:
+            rc = pak_list(args[1], &opts);
+            break;
+        case PAK_CMD_EXTRACT:
+            rc = pak_extract(args[1], count - 2, &args[2], &opts);
+            break;
+        case PAK_CMD_CAT:
+            rc = pak_cat(args[1], args[2], &opts);
+            break;
+        case PAK_CMD_INFO:
+            rc = pak_info(args[1], &opts);
+            break;
+        case PAK_CMD_VERIFY:
+            rc = pak_verify(args[1], &opts);
+            break;
+        default:
+            diag_error("internal command error");
+            rc = 1;
+            break;
+        }
     }
 
+    options_free(&opts);
     free(args);
     return rc == 0 ? 0 : 1;
 }

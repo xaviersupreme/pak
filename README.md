@@ -35,8 +35,9 @@ pak unpack assets.pak -C out
 ```sh
 pak make [options] <archive> <files...>
 pak make [options] <archive> <dirs...>
+pak update [options] <archive> <files...>
 pak list [--long] <archive.pak>
-pak unpack|extract [options] <archive.pak> [files...]
+pak unpack|extract [options] <archive.pak> [files...|patterns...]
 pak cat <archive.pak> <file>
 pak info <archive.pak>
 pak verify <archive.pak>
@@ -47,9 +48,12 @@ pak test <archive.pak>
 
 ```sh
 pak make --compress assets sprites.png theme.wav config.txt
-pak make --compress assets assets/
+pak make --compress --level 9 assets assets/
 pak make --paths game assets/sprites/player.png assets/audio/jump.wav
+pak make assets . --exclude "*.o"
+pak update assets.pak config.txt
 pak list --long assets.pak
+pak unpack assets.pak "*.png" -C out
 pak unpack assets.pak config.txt -C out
 pak unpack --overwrite assets.pak -C out
 pak cat assets.pak config.txt
@@ -67,8 +71,17 @@ pak make weird -- -dash.txt
 `--compress`
 : Use deflate through miniz when it makes an entry smaller. RLE is still tried and used when it wins.
 
+`--level N`
+: Set deflate level from `0` to `10`. This also turns on compression. Short forms `-0` through `-9` work too.
+
 `--paths`
 : Store relative paths instead of only base names.
+
+`--exclude pattern`
+: Skip matching files while packing. `*` and `?` are supported.
+
+`--no-pakignore`
+: Do not read `.pakignore`.
 
 `--long`
 : Show readable sizes, stored size, ratio, method, and CRC32 in `list`.
@@ -89,11 +102,23 @@ pak make weird -- -dash.txt
 
 By default, unpacking refuses to overwrite files.
 
-`extract` and `unpack` accept optional file names. When names are provided, only matching entries are unpacked.
+`extract` and `unpack` accept optional file names or wildcard patterns. Quote wildcard patterns in shells.
 
 Options can appear before or after the command and between positional arguments.
 
-When a directory is passed to `make`, pak walks it recursively and stores paths for the files inside it.
+When a directory is passed to `make`, pak walks it recursively and stores paths for the files inside it. Files are written in archive name order, so the same inputs make the same archive bytes.
+
+## .pakignore
+
+`make` and `update` read `.pakignore` from the current directory. Blank lines are ignored. Lines that start with `#` are comments.
+
+```gitignore
+*.o
+build/
+cache/*.tmp
+```
+
+A pattern ending in `/` skips a folder. A pattern without `/` matches the file name.
 
 ## format
 

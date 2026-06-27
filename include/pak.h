@@ -14,6 +14,35 @@
 #define PAK_OVERWRITE_REFUSE 0
 #define PAK_OVERWRITE_REPLACE 1
 #define PAK_OVERWRITE_SKIP 2
+#define PAK_DEFAULT_COMPRESSION_LEVEL -1
+#define PAK_ARG_MANY -1
+#define PAK_MAX_SEEN_OPTIONS 64
+
+#define PAK_CMD_MAKE 1
+#define PAK_CMD_UPDATE 2
+#define PAK_CMD_LIST 3
+#define PAK_CMD_EXTRACT 4
+#define PAK_CMD_CAT 5
+#define PAK_CMD_INFO 6
+#define PAK_CMD_VERIFY 7
+
+#define PAK_OPT_COMPRESS 0x0001u
+#define PAK_OPT_LEVEL 0x0002u
+#define PAK_OPT_PATHS 0x0004u
+#define PAK_OPT_EXCLUDE 0x0008u
+#define PAK_OPT_NO_PAKIGNORE 0x0010u
+#define PAK_OPT_LONG 0x0020u
+#define PAK_OPT_C 0x0040u
+#define PAK_OPT_OVERWRITE 0x0080u
+#define PAK_OPT_SKIP_EXISTING 0x0100u
+
+#define PAK_CLR_RESET "\033[0m"
+#define PAK_CLR_BOLD "\033[1m"
+#define PAK_CLR_DIM "\033[2m"
+#define PAK_CLR_RED "\033[31m"
+#define PAK_CLR_GREEN "\033[32m"
+#define PAK_CLR_YELLOW "\033[33m"
+#define PAK_CLR_CYAN "\033[36m"
 
 struct path_list {
     char **items;
@@ -21,16 +50,44 @@ struct path_list {
     int capacity;
 };
 
+struct pak_pattern_list {
+    char **items;
+    int count;
+    int capacity;
+};
+
+struct pak_seen_option {
+    unsigned int bit;
+    const char *token;
+};
+
 struct pak_options {
     int quiet;
     int preserve_paths;
     int compress;
+    int compression_level;
     int long_list;
     int overwrite_mode;
+    int use_pakignore;
     const char *extract_dir;
+    unsigned int option_mask;
+    struct pak_seen_option seen_options[PAK_MAX_SEEN_OPTIONS];
+    int seen_option_count;
+    struct pak_pattern_list exclude_patterns;
+};
+
+struct pak_command_spec {
+    const char *name;
+    const char *canonical;
+    int id;
+    int min_args;
+    int max_args;
+    unsigned int allowed_options;
+    const char *usage;
 };
 
 int pak_make(const char *archive_path, int file_count, char **file_paths, const struct pak_options *opts);
+int pak_update(const char *archive_path, int file_count, char **file_paths, const struct pak_options *opts);
 int pak_list(const char *archive_path, const struct pak_options *opts);
 int pak_extract(const char *archive_path, int selected_count, char **selected_names, const struct pak_options *opts);
 int pak_cat(const char *archive_path, const char *entry_name, const struct pak_options *opts);
@@ -50,6 +107,34 @@ void path_list_init(struct path_list *list);
 void path_list_free(struct path_list *list);
 int path_list_add_inputs(struct path_list *list, int input_count, char **inputs, int *saw_directory);
 
+void pattern_list_init(struct pak_pattern_list *list);
+void pattern_list_free(struct pak_pattern_list *list);
+int pattern_list_add(struct pak_pattern_list *list, const char *pattern);
+int pattern_list_load_file(struct pak_pattern_list *list, const char *path);
+int pak_pattern_has_magic(const char *pattern);
+int pak_pattern_match(const char *pattern, const char *path);
+int pak_is_excluded(const struct pak_options *opts, const char *archive_name);
+
+const struct pak_command_spec *pak_command_spec(const char *name);
+void pak_note_option(struct pak_options *opts, unsigned int bit, const char *token);
+void hint_no_command(int argc, char **argv, const struct pak_options *opts);
+void hint_unknown_option(const char *option, int argc, char **argv, int option_index);
+void hint_unknown_command(int argc, char **argv, int count, char **args, const struct pak_options *opts);
+void hint_bad_compression_level(const char *value);
+void hint_missing_option_value(const char *option, const char *value_name);
+int hint_validate_command(const struct pak_command_spec *spec, int argc, char **argv, int count, char **args, const struct pak_options *opts);
+
+const char *pak_clr(FILE *stream, const char *code);
+void diag_error(const char *fmt, ...);
+void diag_hint(const char *fmt, ...);
+void diag_known(const char *fmt, ...);
+void diag_try(const char *fmt, ...);
+void diag_or(const char *fmt, ...);
+void diag_error_start(void);
+void diag_hint_start(void);
+void diag_known_start(void);
+void diag_try_start(void);
+void diag_placeholder(const char *text);
 void log_step(const struct pak_options *opts, const char *fmt, ...);
 void log_item(const struct pak_options *opts, int index, int total, const char *fmt, ...);
 void log_progress(const struct pak_options *opts, const char *name, uint64_t done, uint64_t total, int force);
@@ -60,7 +145,7 @@ uint32_t crc32_finish(uint32_t crc);
 
 int rle_compress(const unsigned char *in, size_t in_size, unsigned char **out, size_t *out_size);
 int rle_decompress(FILE *in, FILE *out, uint64_t in_size, uint64_t out_size, uint32_t *crc, const char *name, const struct pak_options *opts);
-int deflate_compress(const unsigned char *in, size_t in_size, unsigned char **out, size_t *out_size);
+int deflate_compress(const unsigned char *in, size_t in_size, int level, unsigned char **out, size_t *out_size);
 int deflate_decompress(FILE *in, FILE *out, uint64_t in_size, uint64_t out_size, uint32_t *crc, const char *name, const struct pak_options *opts);
 
 int read_u32_le(FILE *fp, uint32_t *value);
