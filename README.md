@@ -63,6 +63,7 @@ pak make --compress assets sprites.png theme.wav config.txt
 pak make --compress --level 9 assets assets/
 pak make --paths game assets/sprites/player.png assets/audio/jump.wav
 pak make assets . --exclude "*.o"
+
 pak update assets.pak config.txt
 pak update assets.pak "*.c"
 pak update assets.pak "**/*.c"
@@ -75,14 +76,13 @@ pak unpack assets.pak "*.png" -C out
 pak unpack assets.pak config.txt -C out
 pak unpack --overwrite assets.pak -C out
 
-pak cat assets.pak config.txt
-pak delete assets.pak "*.tmp"
-pak rename assets.pak config.txt config/default.txt
-
 pak repack assets.pak
 pak repack assets.pak "*.json" --level 9
 pak repack assets.pak "*.wav" --store
 
+pak cat assets.pak config.txt
+pak delete assets.pak "*.tmp"
+pak rename assets.pak config.txt config/default.txt
 pak check assets.pak
 ```
 
