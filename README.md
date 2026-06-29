@@ -86,6 +86,8 @@ pak rename assets.pak config.txt config/default.txt
 pak check assets.pak
 ```
 
+`check` validates archive data. If it finds damage in the pak file, it offers to write `<name>.repaired.pak`. Clean entries are copied while damaged payloads with readable headers are saved with recovered bytes plus padding, and also entries with broken headers are skipped unless pak can resync to a later valid entry.
+
 Use `--` when a filename starts with `-`:
 
 ```sh
@@ -99,7 +101,10 @@ Flags are command scoped. They can appear before or after the command, but pak r
 ### compression
 
 `--compress`
-: Use deflate through miniz when it makes an entry smaller. RLE is still tried and used when it wins. Works with `make`, `update`, and `repack`. `repack` uses this behavior by default.
+: Use deflate through miniz when it makes an entry smaller. Large files need a stronger sample win before pak spends time compressing them. RLE is still tried when compression is worth checking. Works with `make`, `update`, and `repack`. `repack` uses this behavior by default.
+
+`--no-smart-compress`
+: Enable compression without file type or sample checks. pak still stores an entry if the final compressed data is not smaller.
 
 `--level N`
 : Set deflate level from `0` to `10`. This also turns on compression. Short forms `-0` through `-9` work too.
@@ -178,8 +183,6 @@ Each entry stores:
 * method: `store`, `rle`, or `deflate`
 * CRC32
 * raw entry bytes
-
-`pak` can still read older `PAK1` archives.
 
 ## fuzzing (for development)
 

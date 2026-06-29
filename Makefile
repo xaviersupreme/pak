@@ -16,8 +16,8 @@ CFLAGS ?= -std=c11 -Wall -Wextra -pedantic -O2
 LDFLAGS ?=
 CPPFLAGS ?= -Iinclude -Ivendor/miniz -DMINIZ_NO_ZLIB_COMPATIBLE_NAMES
 
-SRC = src/main.c src/archive.c src/io.c src/paths.c src/log.c src/diag.c src/endian.c src/crc.c src/compress.c src/pattern.c src/hints.c vendor/miniz/miniz.c vendor/miniz/miniz_tdef.c vendor/miniz/miniz_tinfl.c
-LIB_SRC = $(filter-out src/main.c,$(SRC))
+SRC = src/cli/main.c src/cli/hints.c src/archive/core.c src/archive/check.c src/codec/compress.c src/codec/crc.c src/fs/io.c src/fs/paths.c src/fs/pattern.c src/output/log.c src/output/diag.c src/format/endian.c vendor/miniz/miniz.c vendor/miniz/miniz_tdef.c vendor/miniz/miniz_tinfl.c
+LIB_SRC = $(filter-out src/cli/main.c,$(SRC))
 OBJ = $(SRC:.c=.o)
 BIN = pak
 FUZZ_CC ?= clang
@@ -94,16 +94,17 @@ else
 	./$(FUZZ_BIN) $(FUZZ_CORPUS_DIR) -max_total_time=15
 endif
 
-%.o: %.c include/pak.h
+%.o: %.c include/pak.h src/archive/internal.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
 ifeq ($(OS),Windows_NT)
 clean:
-	-cmd /C "del /Q $(subst /,\,$(OBJ)) $(BIN) $(FUZZ_BIN) $(FUZZ_SMOKE_BIN) >NUL 2>&1"
-	-cmd /C "rmdir /S /Q fuzz\bin fuzz\corpus >NUL 2>&1"
+	-cmd /C "for %%F in ($(subst /,\,$(OBJ)) $(BIN) pak $(subst /,\,$(FUZZ_BIN)) $(subst /,\,$(FUZZ_SMOKE_BIN)) src\*.o) do if exist %%F del /Q %%F"
+	-cmd /C "if exist fuzz\bin rmdir /S /Q fuzz\bin & if exist fuzz\corpus rmdir /S /Q fuzz\corpus"
 else
 clean:
 	rm -f $(OBJ) $(BIN) $(FUZZ_BIN) $(FUZZ_SMOKE_BIN)
+	rm -f src/*.o
 	rm -rf $(FUZZ_BIN_DIR) fuzz/corpus
 endif
 

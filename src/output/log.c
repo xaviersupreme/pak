@@ -95,12 +95,24 @@ static const char *clr(const char *code)
     return pak_clr(stdout, code);
 }
 
+static int progress_open;
+
+void log_finish_progress(void)
+{
+    if (progress_open) {
+        putchar('\n');
+        fflush(stdout);
+        progress_open = 0;
+    }
+}
+
 static void vlog_line(const struct pak_options *opts, const char *prefix, const char *fmt, va_list ap)
 {
     if (opts != NULL && opts->quiet) {
         return;
     }
 
+    log_finish_progress();
     fputs(clr(PAK_CLR_CYAN), stdout);
     fputs(prefix, stdout);
     fputs(clr(PAK_CLR_RESET), stdout);
@@ -125,6 +137,7 @@ void log_item(const struct pak_options *opts, int index, int total, const char *
         return;
     }
 
+    log_finish_progress();
     printf("  %s%d/%d%s  ", clr(PAK_CLR_DIM), index, total, clr(PAK_CLR_RESET));
     fputs(clr(PAK_CLR_BOLD), stdout);
     va_start(ap, fmt);
@@ -183,9 +196,11 @@ void log_progress(const struct pak_options *opts, const char *name, uint64_t don
         putchar(i < filled ? '#' : '-');
     }
     printf("%s]%s %s%3d%%%s  %s%s%s/%s%s%s", clr(PAK_CLR_GREEN), clr(PAK_CLR_RESET), clr(percent == 100 ? PAK_CLR_GREEN : PAK_CLR_YELLOW), percent, clr(PAK_CLR_RESET), clr(PAK_CLR_BOLD), done_buf, clr(PAK_CLR_RESET), clr(PAK_CLR_DIM), total_buf, clr(PAK_CLR_RESET));
+    progress_open = 1;
 
     if (force) {
         putchar('\n');
+        progress_open = 0;
     }
     fflush(stdout);
 }
@@ -234,9 +249,11 @@ void log_count_progress(const struct pak_options *opts, const char *name, uint64
         putchar(i < filled ? '#' : '-');
     }
     printf("%s]%s %s%3d%%%s  %s%llu%s/%s%llu%s", clr(PAK_CLR_GREEN), clr(PAK_CLR_RESET), clr(percent == 100 ? PAK_CLR_GREEN : PAK_CLR_YELLOW), percent, clr(PAK_CLR_RESET), clr(PAK_CLR_BOLD), (unsigned long long)done, clr(PAK_CLR_RESET), clr(PAK_CLR_DIM), (unsigned long long)total, clr(PAK_CLR_RESET));
+    progress_open = 1;
 
     if (force) {
         putchar('\n');
+        progress_open = 0;
     }
     fflush(stdout);
 }

@@ -11,6 +11,7 @@ static void diag_color(const char *code)
 
 static void diag_label(const char *label, const char *color)
 {
+    log_finish_progress();
     fflush(stdout);
     diag_color(color);
     fputs(label, stderr);

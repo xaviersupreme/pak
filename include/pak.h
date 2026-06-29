@@ -2,6 +2,9 @@
 #define PAK_H
 
 #ifndef _WIN32
+#ifndef _FILE_OFFSET_BITS
+#define _FILE_OFFSET_BITS 64
+#endif
 #ifndef _POSIX_C_SOURCE
 #define _POSIX_C_SOURCE 200809L
 #endif
@@ -46,6 +49,7 @@
 #define PAK_OPT_SKIP_EXISTING 0x0100u
 #define PAK_OPT_FULL_NAME 0x0200u
 #define PAK_OPT_STORE 0x0400u
+#define PAK_OPT_NO_SMART_COMPRESS 0x0800u
 
 #define PAK_CLR_RESET "\033[0m"
 #define PAK_CLR_BOLD "\033[1m"
@@ -57,6 +61,7 @@
 
 struct path_list {
     char **items;
+    char **names;
     int count;
     int capacity;
 };
@@ -76,6 +81,7 @@ struct pak_options {
     int quiet;
     int preserve_paths;
     int compress;
+    int smart_compress;
     int store;
     int compression_level;
     int long_list;
@@ -99,8 +105,8 @@ struct pak_command_spec {
     const char *usage;
 };
 
-int pak_make(const char *archive_path, int file_count, char **file_paths, const struct pak_options *opts);
-int pak_update(const char *archive_path, int file_count, char **file_paths, const struct pak_options *opts);
+int pak_make(const char *archive_path, int file_count, char **file_paths, char **archive_names, const struct pak_options *opts);
+int pak_update(const char *archive_path, int file_count, char **file_paths, char **archive_names, const struct pak_options *opts);
 int pak_list(const char *archive_path, int selected_count, char **selected_names, const struct pak_options *opts);
 int pak_extract(const char *archive_path, int selected_count, char **selected_names, const struct pak_options *opts);
 int pak_cat(const char *archive_path, const char *entry_name, const struct pak_options *opts);
@@ -156,6 +162,7 @@ void diag_or_start(void);
 void diag_placeholder(const char *text);
 void log_step(const struct pak_options *opts, const char *fmt, ...);
 void log_item(const struct pak_options *opts, int index, int total, const char *fmt, ...);
+void log_finish_progress(void);
 void log_progress(const struct pak_options *opts, const char *name, uint64_t done, uint64_t total, int force);
 void log_count_progress(const struct pak_options *opts, const char *name, uint64_t done, uint64_t total, int force);
 
@@ -165,8 +172,10 @@ uint32_t crc32_finish(uint32_t crc);
 
 int rle_compress(const unsigned char *in, size_t in_size, unsigned char **out, size_t *out_size);
 int rle_decompress(FILE *in, FILE *out, uint64_t in_size, uint64_t out_size, uint32_t *crc, const char *name, const struct pak_options *opts);
+int rle_recover(FILE *in, FILE *out, uint64_t in_size, uint64_t out_size, uint32_t *crc, uint64_t *wrote, const char *name, const struct pak_options *opts);
 int deflate_compress(const unsigned char *in, size_t in_size, int level, unsigned char **out, size_t *out_size);
 int deflate_decompress(FILE *in, FILE *out, uint64_t in_size, uint64_t out_size, uint32_t *crc, const char *name, const struct pak_options *opts);
+int deflate_recover(FILE *in, FILE *out, uint64_t in_size, uint64_t out_size, uint32_t *crc, uint64_t *wrote, const char *name, const struct pak_options *opts);
 
 int read_u32_le(FILE *fp, uint32_t *value);
 int read_u64_le(FILE *fp, uint64_t *value);

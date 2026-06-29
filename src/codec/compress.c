@@ -117,6 +117,7 @@ int rle_decompress(FILE *in, FILE *out, uint64_t in_size, uint64_t out_size, uin
     read_total = 0;
     wrote_total = 0;
     out_len = 0;
+    log_step(opts, "decompress %s with rle: %llu -> %llu bytes", name, (unsigned long long)in_size, (unsigned long long)out_size);
     while (read_total < in_size) {
         int ch = fgetc(in);
 
@@ -162,6 +163,67 @@ int rle_decompress(FILE *in, FILE *out, uint64_t in_size, uint64_t out_size, uin
     return wrote_total == out_size ? 0 : -1;
 }
 
+int rle_recover(FILE *in, FILE *out, uint64_t in_size, uint64_t out_size, uint32_t *crc, uint64_t *wrote, const char *name, const struct pak_options *opts)
+{
+    unsigned char out_buf[COPY_BUF_SIZE];
+    uint64_t read_total;
+    uint64_t wrote_total;
+    size_t out_len;
+
+    read_total = 0;
+    wrote_total = 0;
+    out_len = 0;
+    log_step(opts, "recover rle %s: %llu -> %llu bytes", name, (unsigned long long)in_size, (unsigned long long)out_size);
+    while (read_total < in_size && wrote_total < out_size) {
+        int ch = fgetc(in);
+
+        if (ch == EOF) {
+            break;
+        }
+        read_total++;
+
+        if ((unsigned char)ch == RLE_MARK) {
+            int count = fgetc(in);
+            int value = fgetc(in);
+            uint64_t room;
+            int take;
+
+            if (count == EOF || value == EOF || read_total + 2 > in_size) {
+                break;
+            }
+            read_total += 2;
+            room = out_size - wrote_total;
+            take = (uint64_t)count > room ? (int)room : count;
+            if (take <= 0) {
+                break;
+            }
+            if (append_run(out, out_buf, &out_len, crc, (unsigned char)value, take) != 0) {
+                return -1;
+            }
+            wrote_total += (uint64_t)take;
+            if (take != count) {
+                break;
+            }
+        } else {
+            unsigned char value = (unsigned char)ch;
+
+            if (append_output(out, out_buf, &out_len, crc, &value, 1) != 0) {
+                return -1;
+            }
+            wrote_total++;
+        }
+
+        log_progress(opts, name, wrote_total, out_size, wrote_total == out_size);
+    }
+
+    if (flush_output(out, out_buf, &out_len, crc) != 0) {
+        return -1;
+    }
+
+    *wrote = wrote_total;
+    return 0;
+}
+
 int deflate_compress(const unsigned char *in, size_t in_size, int level, unsigned char **out, size_t *out_size)
 {
     mz_ulong bound;
@@ -203,8 +265,12 @@ int deflate_decompress(FILE *in, FILE *out, uint64_t in_size, uint64_t out_size,
         return -1;
     }
 
+    log_step(opts, "inflate %s: %llu -> %llu bytes", name, (unsigned long long)in_size, (unsigned long long)out_size);
     status = MZ_OK;
     while (status != MZ_STREAM_END) {
+        mz_ulong total_in_before;
+        mz_ulong total_out_before;
+
         if (stream.avail_in == 0 && read_total < in_size) {
             size_t want = in_size - read_total > COPY_BUF_SIZE ? COPY_BUF_SIZE : (size_t)(in_size - read_total);
             size_t got = fread(in_buf, 1, want, in);
@@ -220,9 +286,15 @@ int deflate_decompress(FILE *in, FILE *out, uint64_t in_size, uint64_t out_size,
 
         stream.next_out = out_buf;
         stream.avail_out = COPY_BUF_SIZE;
+        total_in_before = stream.total_in;
+        total_out_before = stream.total_out;
         status = mz_inflate(&stream, MZ_NO_FLUSH);
 
         if (status != MZ_OK && status != MZ_STREAM_END && status != MZ_BUF_ERROR) {
+            mz_inflateEnd(&stream);
+            return -1;
+        }
+        if (stream.total_in == total_in_before && stream.total_out == total_out_before) {
             mz_inflateEnd(&stream);
             return -1;
         }
@@ -252,4 +324,80 @@ int deflate_decompress(FILE *in, FILE *out, uint64_t in_size, uint64_t out_size,
 
     mz_inflateEnd(&stream);
     return read_total == in_size && wrote_total == out_size ? 0 : -1;
+}
+
+int deflate_recover(FILE *in, FILE *out, uint64_t in_size, uint64_t out_size, uint32_t *crc, uint64_t *wrote, const char *name, const struct pak_options *opts)
+{
+    unsigned char in_buf[COPY_BUF_SIZE];
+    unsigned char out_buf[COPY_BUF_SIZE];
+    mz_stream stream;
+    uint64_t read_total = 0;
+    uint64_t wrote_total = 0;
+    int status;
+
+    memset(&stream, 0, sizeof(stream));
+    if (mz_inflateInit(&stream) != MZ_OK) {
+        return -1;
+    }
+
+    log_step(opts, "recover deflate %s: %llu -> %llu bytes", name, (unsigned long long)in_size, (unsigned long long)out_size);
+    status = MZ_OK;
+    while (status != MZ_STREAM_END && wrote_total < out_size) {
+        mz_ulong total_in_before;
+        mz_ulong total_out_before;
+
+        if (stream.avail_in == 0 && read_total < in_size) {
+            size_t want = in_size - read_total > COPY_BUF_SIZE ? COPY_BUF_SIZE : (size_t)(in_size - read_total);
+            size_t got = fread(in_buf, 1, want, in);
+
+            if (got == 0) {
+                break;
+            }
+            read_total += got;
+            stream.next_in = in_buf;
+            stream.avail_in = (mz_uint)got;
+        } else if (stream.avail_in == 0) {
+            break;
+        }
+
+        stream.next_out = out_buf;
+        stream.avail_out = COPY_BUF_SIZE;
+        total_in_before = stream.total_in;
+        total_out_before = stream.total_out;
+        status = mz_inflate(&stream, MZ_NO_FLUSH);
+
+        if (status != MZ_OK && status != MZ_STREAM_END && status != MZ_BUF_ERROR) {
+            break;
+        }
+        if (stream.total_in == total_in_before && stream.total_out == total_out_before) {
+            break;
+        }
+
+        {
+            size_t produced = COPY_BUF_SIZE - stream.avail_out;
+
+            if (produced > 0) {
+                uint64_t room = out_size - wrote_total;
+                size_t take = produced > room ? (size_t)room : produced;
+
+                if (out != NULL && fwrite(out_buf, 1, take, out) != take) {
+                    mz_inflateEnd(&stream);
+                    return -1;
+                }
+                *crc = crc32_update(*crc, out_buf, take);
+                wrote_total += take;
+                log_progress(opts, name, wrote_total, out_size, status == MZ_STREAM_END && wrote_total == out_size);
+                if (take != produced) {
+                    break;
+                }
+            }
+            if (produced == 0 && status == MZ_BUF_ERROR && stream.avail_in == 0) {
+                break;
+            }
+        }
+    }
+
+    mz_inflateEnd(&stream);
+    *wrote = wrote_total;
+    return 0;
 }

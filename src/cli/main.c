@@ -5,40 +5,77 @@
 #include <stdlib.h>
 #include <string.h>
 
+static void usage_section(FILE *out, const char *name)
+{
+    fprintf(out, "\n%s%s:%s\n", pak_clr(out, PAK_CLR_BOLD PAK_CLR_CYAN), name, pak_clr(out, PAK_CLR_RESET));
+}
+
+static void usage_command(FILE *out, const char *command, const char *args)
+{
+    fprintf(out, "  %spak%s %s%-7s%s %s%s%s\n",
+        pak_clr(out, PAK_CLR_DIM),
+        pak_clr(out, PAK_CLR_RESET),
+        pak_clr(out, PAK_CLR_BOLD PAK_CLR_GREEN),
+        command,
+        pak_clr(out, PAK_CLR_RESET),
+        pak_clr(out, PAK_CLR_DIM),
+        args,
+        pak_clr(out, PAK_CLR_RESET));
+}
+
+static void usage_flag(FILE *out, const char *flag, const char *desc)
+{
+    fprintf(out, "  %s%-27s%s %s\n",
+        pak_clr(out, PAK_CLR_GREEN),
+        flag,
+        pak_clr(out, PAK_CLR_RESET),
+        desc);
+}
+
 static void usage(FILE *out)
 {
-    fprintf(out, "usage:\n");
-    fprintf(out, "  pak make [options] <archive.pak> <files...>\n");
-    fprintf(out, "  pak update [options] <archive.pak> <files...>\n");
-    fprintf(out, "  pak list [options] <archive.pak> [files...|patterns...]\n");
-    fprintf(out, "  pak extract [options] <archive.pak> [files...|patterns...]\n");
-    fprintf(out, "  pak unpack [options] <archive.pak> [files...|patterns...]\n");
-    fprintf(out, "  pak cat <archive.pak> <file|pattern>\n");
-    fprintf(out, "  pak info <archive.pak>\n");
-    fprintf(out, "  pak delete <archive.pak> <files...|patterns...>\n");
-    fprintf(out, "  pak rename <archive.pak> <old> <new>\n");
-    fprintf(out, "  pak repack [options] <archive.pak> [files...|patterns...]\n");
-    fprintf(out, "  pak check <archive.pak>\n");
+    fprintf(out, "%susage:%s\n", pak_clr(out, PAK_CLR_BOLD PAK_CLR_CYAN), pak_clr(out, PAK_CLR_RESET));
+    usage_command(out, "make", "[options] <archive.pak> <files...>");
+    usage_command(out, "update", "[options] <archive.pak> <files...>");
+    usage_command(out, "list", "[options] <archive.pak> [files...|patterns...]");
+    usage_command(out, "extract", "[options] <archive.pak> [files...|patterns...]");
+    usage_command(out, "unpack", "[options] <archive.pak> [files...|patterns...]");
+    usage_command(out, "cat", "<archive.pak> <file|pattern>");
+    usage_command(out, "info", "<archive.pak>");
+    usage_command(out, "delete", "<archive.pak> <files...|patterns...>");
+    usage_command(out, "rename", "<archive.pak> <old> <new>");
+    usage_command(out, "repack", "[options] <archive.pak> [files...|patterns...]");
+    usage_command(out, "check", "<archive.pak>");
+
     fprintf(out, "\nflags are command scoped; they can appear before or after the command.\n");
-    fprintf(out, "\ncompression flags for make/update/repack:\n");
-    fprintf(out, "  --compress               compress entries when useful\n");
-    fprintf(out, "  --level <0..10>, -0..-9  set deflate level and enable compression\n");
-    fprintf(out, "\nmake/update flags:\n");
-    fprintf(out, "  --paths                  keep relative paths\n");
-    fprintf(out, "  --exclude <pattern>      skip files while packing\n");
-    fprintf(out, "  --no-pakignore           ignore .pakignore\n");
-    fprintf(out, "\nrepack flags:\n");
-    fprintf(out, "  --store                  store entries without compression\n");
-    fprintf(out, "\nlist flags:\n");
-    fprintf(out, "  --long                   detailed list output\n");
-    fprintf(out, "  --full-name              show full names and enable long output\n");
-    fprintf(out, "\nextract/unpack flags:\n");
-    fprintf(out, "  -C <dir>, -C<dir>        extract into directory\n");
-    fprintf(out, "  --overwrite              replace existing files when extracting\n");
-    fprintf(out, "  --skip-existing          skip existing files when extracting\n");
-    fprintf(out, "\nglobal flags:\n");
-    fprintf(out, "  -h, --help               show help\n");
-    fprintf(out, "  --                       stop parsing options\n");
+
+    usage_section(out, "compression flags for make/update/repack");
+    usage_flag(out, "--compress", "compress useful entries, skip weak wins on large files");
+    usage_flag(out, "--no-smart-compress", "enable compression without file type or sample skipping");
+    usage_flag(out, "--level <0..10>, -0..-9", "set deflate level and enable compression");
+
+    usage_section(out, "make/update flags");
+    usage_flag(out, "--paths", "keep relative paths");
+    usage_flag(out, "--exclude <pattern>", "skip files while packing");
+    usage_flag(out, "--no-pakignore", "ignore .pakignore");
+
+    usage_section(out, "repack flags");
+    usage_flag(out, "--store", "store entries without compression");
+
+    usage_section(out, "list flags");
+    usage_flag(out, "--long", "detailed list output");
+    usage_flag(out, "--full-name", "show full names and enable long output");
+
+    usage_section(out, "extract/unpack flags");
+    usage_flag(out, "-C <dir>, -C<dir>", "extract into directory");
+    usage_flag(out, "--overwrite", "replace existing files when extracting");
+    usage_flag(out, "--skip-existing", "skip existing files when extracting");
+
+    usage_section(out, "global flags");
+    usage_flag(out, "-h, --help", "show help");
+    usage_flag(out, "--", "stop parsing options");
+
+    fprintf(out, "\ncheck validates data, scans damaged headers, and offers repair.\n");
 }
 
 static int is_help_flag(const char *arg)
@@ -98,6 +135,7 @@ static void options_init(struct pak_options *opts)
 {
     memset(opts, 0, sizeof(*opts));
     opts->compression_level = PAK_DEFAULT_COMPRESSION_LEVEL;
+    opts->smart_compress = 1;
     opts->store = 0;
     opts->overwrite_mode = PAK_OVERWRITE_REFUSE;
     opts->use_pakignore = 1;
@@ -173,6 +211,10 @@ static int parse_args(int argc, char **argv, char **args, int *count, struct pak
         } else if (parsing_options && strcmp(argv[i], "--compress") == 0) {
             opts->compress = 1;
             pak_note_option(opts, PAK_OPT_COMPRESS, argv[i]);
+        } else if (parsing_options && (strcmp(argv[i], "--no-smart-compress") == 0 || strcmp(argv[i], "--no-smart-compression") == 0)) {
+            opts->compress = 1;
+            opts->smart_compress = 0;
+            pak_note_option(opts, PAK_OPT_NO_SMART_COMPRESS, argv[i]);
         } else if (parsing_options && strcmp(argv[i], "--store") == 0) {
             opts->store = 1;
             pak_note_option(opts, PAK_OPT_STORE, argv[i]);
@@ -293,13 +335,10 @@ static int run_write_command(const char *command, int count, char **args, struct
     path_list_init(&files);
     if (path_list_add_inputs(&files, count - 2, &args[2], &saw_directory) == 0) {
         write_opts = *opts;
-        if (saw_directory) {
-            write_opts.preserve_paths = 1;
-        }
         if (strcmp(command, "make") == 0) {
-            rc = pak_make(archive_path, files.count, files.items, &write_opts) == 0 ? 0 : 1;
+            rc = pak_make(archive_path, files.count, files.items, files.names, &write_opts) == 0 ? 0 : 1;
         } else {
-            rc = pak_update(archive_path, files.count, files.items, &write_opts) == 0 ? 0 : 1;
+            rc = pak_update(archive_path, files.count, files.items, files.names, &write_opts) == 0 ? 0 : 1;
         }
     }
 

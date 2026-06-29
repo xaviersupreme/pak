@@ -3,7 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#define COMPRESS_OPTIONS (PAK_OPT_COMPRESS | PAK_OPT_LEVEL)
+#define COMPRESS_OPTIONS (PAK_OPT_COMPRESS | PAK_OPT_LEVEL | PAK_OPT_NO_SMART_COMPRESS)
 #define WRITE_OPTIONS (COMPRESS_OPTIONS | PAK_OPT_PATHS | PAK_OPT_EXCLUDE | PAK_OPT_NO_PAKIGNORE)
 #define EXTRACT_OPTIONS (PAK_OPT_C | PAK_OPT_OVERWRITE | PAK_OPT_SKIP_EXISTING)
 #define REPACK_OPTIONS (COMPRESS_OPTIONS | PAK_OPT_STORE)
@@ -35,6 +35,8 @@ static const struct pak_command_spec command_specs[] = {
 
 static const struct option_spec option_specs[] = {
     { "--compress", PAK_OPT_COMPRESS },
+    { "--no-smart-compress", PAK_OPT_NO_SMART_COMPRESS },
+    { "--no-smart-compression", PAK_OPT_NO_SMART_COMPRESS },
     { "--store", PAK_OPT_STORE },
     { "--level", PAK_OPT_LEVEL },
     { "--paths", PAK_OPT_PATHS },
@@ -334,11 +336,14 @@ static void print_write_options(const struct pak_options *opts)
     if (opts == NULL) {
         return;
     }
-    if (opts->compress && opts->compression_level == PAK_DEFAULT_COMPRESSION_LEVEL) {
+    if (opts->compress && opts->smart_compress && opts->compression_level == PAK_DEFAULT_COMPRESSION_LEVEL) {
         fputs(" --compress", stderr);
     }
     if (opts->compression_level != PAK_DEFAULT_COMPRESSION_LEVEL) {
         fprintf(stderr, " --level %d", opts->compression_level);
+    }
+    if (!opts->smart_compress) {
+        fputs(" --no-smart-compress", stderr);
     }
     if (opts->preserve_paths) {
         fputs(" --paths", stderr);
@@ -380,8 +385,11 @@ static void print_repack_options(const struct pak_options *opts)
     }
     if (opts->compression_level != PAK_DEFAULT_COMPRESSION_LEVEL) {
         fprintf(stderr, " --level %d", opts->compression_level);
-    } else if (opts->compress) {
+    } else if (opts->compress && opts->smart_compress) {
         fputs(" --compress", stderr);
+    }
+    if (!opts->smart_compress) {
+        fputs(" --no-smart-compress", stderr);
     }
 }
 
@@ -821,7 +829,7 @@ void hint_no_command(int argc, char **argv, const struct pak_options *opts)
         fputc(' ', stderr);
         print_placeholder("<archive.pak>");
         fputc('\n', stderr);
-    } else if (opts != NULL && (opts->option_mask & (PAK_OPT_COMPRESS | PAK_OPT_LEVEL)) != 0) {
+    } else if (opts != NULL && (opts->option_mask & COMPRESS_OPTIONS) != 0) {
         diag_hint("compression options need make, update, or repack");
         print_try_start();
         fputs(" repack", stderr);

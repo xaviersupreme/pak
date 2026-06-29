@@ -43,6 +43,26 @@ static char *join_scan_path(const char *dir, const char *name)
     return out;
 }
 
+static size_t scan_root_len(const char *path)
+{
+    size_t len = strlen(path);
+
+    while (len > 0 && (path[len - 1] == '/' || path[len - 1] == '\\')) {
+        len--;
+    }
+    return len;
+}
+
+static const char *relative_scan_name(const char *path, size_t root_len)
+{
+    const char *name = path + root_len;
+
+    while (*name == '/' || *name == '\\') {
+        name++;
+    }
+    return name;
+}
+
 #ifdef _WIN32
 static char *copy_path_part(const char *path, size_t len)
 {
@@ -115,6 +135,7 @@ static int path_is_file(const char *path)
 void path_list_init(struct path_list *list)
 {
     list->items = NULL;
+    list->names = NULL;
     list->count = 0;
     list->capacity = 0;
 }
@@ -125,23 +146,38 @@ void path_list_free(struct path_list *list)
 
     for (i = 0; i < list->count; i++) {
         free(list->items[i]);
+        free(list->names[i]);
     }
     free(list->items);
+    free(list->names);
     path_list_init(list);
 }
 
-static int path_list_add(struct path_list *list, const char *path)
+static int path_list_add(struct path_list *list, const char *path, const char *name)
 {
     char **items;
+    char **names;
     int capacity;
 
     if (list->count == list->capacity) {
         capacity = list->capacity == 0 ? 16 : list->capacity * 2;
-        items = realloc(list->items, (size_t)capacity * sizeof(*items));
+        items = malloc((size_t)capacity * sizeof(*items));
         if (items == NULL) {
             return -1;
         }
+        names = malloc((size_t)capacity * sizeof(*names));
+        if (names == NULL) {
+            free(items);
+            return -1;
+        }
+        if (list->count > 0) {
+            memcpy(items, list->items, (size_t)list->count * sizeof(*items));
+            memcpy(names, list->names, (size_t)list->count * sizeof(*names));
+        }
+        free(list->items);
+        free(list->names);
         list->items = items;
+        list->names = names;
         list->capacity = capacity;
     }
 
@@ -149,19 +185,54 @@ static int path_list_add(struct path_list *list, const char *path)
     if (list->items[list->count] == NULL) {
         return -1;
     }
+    list->names[list->count] = name == NULL ? NULL : copy_string(name);
+    if (name != NULL && list->names[list->count] == NULL) {
+        free(list->items[list->count]);
+        return -1;
+    }
     list->count++;
     return 0;
 }
 
-static int compare_paths(const void *left, const void *right)
-{
-    const char *a = *(const char * const *)left;
-    const char *b = *(const char * const *)right;
+struct path_pair {
+    char *path;
+    char *name;
+};
 
-    return strcmp(a, b);
+static int compare_path_pairs(const void *left, const void *right)
+{
+    const struct path_pair *a = left;
+    const struct path_pair *b = right;
+
+    return strcmp(a->name != NULL ? a->name : a->path, b->name != NULL ? b->name : b->path);
 }
 
-static int collect_directory(struct path_list *list, const char *dir)
+static int path_list_sort(struct path_list *list)
+{
+    struct path_pair *pairs;
+    int i;
+
+    if (list->count <= 1) {
+        return 0;
+    }
+    pairs = malloc((size_t)list->count * sizeof(*pairs));
+    if (pairs == NULL) {
+        return -1;
+    }
+    for (i = 0; i < list->count; i++) {
+        pairs[i].path = list->items[i];
+        pairs[i].name = list->names[i];
+    }
+    qsort(pairs, (size_t)list->count, sizeof(*pairs), compare_path_pairs);
+    for (i = 0; i < list->count; i++) {
+        list->items[i] = pairs[i].path;
+        list->names[i] = pairs[i].name;
+    }
+    free(pairs);
+    return 0;
+}
+
+static int collect_directory(struct path_list *list, const char *dir, size_t root_len)
 {
 #ifdef _WIN32
     WIN32_FIND_DATAA data;
@@ -189,13 +260,13 @@ static int collect_directory(struct path_list *list, const char *dir)
             return -1;
         }
         if ((data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
-            if (collect_directory(list, child) != 0) {
+            if (collect_directory(list, child, root_len) != 0) {
                 free(child);
                 FindClose(find);
                 return -1;
             }
         } else if (path_is_file(child)) {
-            if (path_list_add(list, child) != 0) {
+            if (path_list_add(list, child, relative_scan_name(child, root_len)) != 0) {
                 free(child);
                 FindClose(find);
                 return -1;
@@ -227,13 +298,13 @@ static int collect_directory(struct path_list *list, const char *dir)
             return -1;
         }
         if (path_is_directory(child)) {
-            if (collect_directory(list, child) != 0) {
+            if (collect_directory(list, child, root_len) != 0) {
                 free(child);
                 closedir(dp);
                 return -1;
             }
         } else if (path_is_file(child)) {
-            if (path_list_add(list, child) != 0) {
+            if (path_list_add(list, child, relative_scan_name(child, root_len)) != 0) {
                 free(child);
                 closedir(dp);
                 return -1;
@@ -281,7 +352,7 @@ static int collect_matching_files(struct path_list *list, const char *dir, const
                 return -1;
             }
         } else if (path_is_file(child) && pak_pattern_match(pattern, child)) {
-            if (list != NULL && path_list_add(list, child) != 0) {
+            if (list != NULL && path_list_add(list, child, NULL) != 0) {
                 free(child);
                 FindClose(find);
                 return -1;
@@ -320,7 +391,7 @@ static int collect_matching_files(struct path_list *list, const char *dir, const
                 return -1;
             }
         } else if (path_is_file(child) && pak_pattern_match(pattern, child)) {
-            if (list != NULL && path_list_add(list, child) != 0) {
+            if (list != NULL && path_list_add(list, child, NULL) != 0) {
                 free(child);
                 closedir(dp);
                 return -1;
@@ -424,7 +495,7 @@ static int add_wildcard_input(struct path_list *list, const char *input, int *sa
         }
         if ((data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
             *saw_directory = 1;
-            if (collect_directory(list, path) != 0) {
+            if (collect_directory(list, path, scan_root_len(path)) != 0) {
                 diag_error("cannot read directory '%s': %s", path, strerror(errno));
                 free(path);
                 FindClose(find);
@@ -432,7 +503,7 @@ static int add_wildcard_input(struct path_list *list, const char *input, int *sa
                 return -1;
             }
         } else if (path_is_file(path)) {
-            if (path_list_add(list, path) != 0) {
+            if (path_list_add(list, path, NULL) != 0) {
                 diag_error("out of memory");
                 free(path);
                 FindClose(find);
@@ -478,13 +549,13 @@ static int add_wildcard_input(struct path_list *list, const char *input, int *sa
 
         if (path_is_directory(path)) {
             *saw_directory = 1;
-            if (collect_directory(list, path) != 0) {
+            if (collect_directory(list, path, scan_root_len(path)) != 0) {
                 diag_error("cannot read directory '%s': %s", path, strerror(errno));
                 globfree(&matches);
                 return -1;
             }
         } else if (path_is_file(path)) {
-            if (path_list_add(list, path) != 0) {
+            if (path_list_add(list, path, NULL) != 0) {
                 diag_error("out of memory");
                 globfree(&matches);
                 return -1;
@@ -514,12 +585,12 @@ int path_list_add_inputs(struct path_list *list, int input_count, char **inputs,
             }
         } else if (path_is_directory(inputs[i])) {
             *saw_directory = 1;
-            if (collect_directory(list, inputs[i]) != 0) {
+            if (collect_directory(list, inputs[i], scan_root_len(inputs[i])) != 0) {
                 diag_error("cannot read directory '%s': %s", inputs[i], strerror(errno));
                 return -1;
             }
         } else if (path_is_file(inputs[i])) {
-            if (path_list_add(list, inputs[i]) != 0) {
+            if (path_list_add(list, inputs[i], NULL) != 0) {
                 diag_error("out of memory");
                 return -1;
             }
@@ -529,6 +600,5 @@ int path_list_add_inputs(struct path_list *list, int input_count, char **inputs,
         }
     }
 
-    qsort(list->items, (size_t)list->count, sizeof(*list->items), compare_paths);
-    return 0;
+    return path_list_sort(list);
 }

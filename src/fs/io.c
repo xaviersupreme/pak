@@ -69,6 +69,13 @@ const char *io_base_name(const char *path)
     return name;
 }
 
+static int io_is_printable_name_char(char ch)
+{
+    unsigned char value = (unsigned char)ch;
+
+    return value >= 32 && value != 127;
+}
+
 int io_is_plain_name(const char *name)
 {
     const char *p;
@@ -81,6 +88,9 @@ int io_is_plain_name(const char *name)
     }
 
     for (p = name; *p != '\0'; p++) {
+        if (!io_is_printable_name_char(*p)) {
+            return 0;
+        }
         if (*p == '/' || *p == '\\' || *p == ':') {
             return 0;
         }
@@ -104,6 +114,9 @@ int io_is_safe_path(const char *name)
 
     part = name;
     for (p = name; ; p++) {
+        if (*p != '\0' && !io_is_printable_name_char(*p)) {
+            return 0;
+        }
         if (*p == '\\' || *p == ':') {
             return 0;
         }
@@ -132,6 +145,18 @@ static void strip_leading_current_dir(char *path)
     }
 }
 
+static void strip_leading_root(char *path)
+{
+#ifdef _WIN32
+    if (((path[0] >= 'A' && path[0] <= 'Z') || (path[0] >= 'a' && path[0] <= 'z')) && path[1] == ':' && path[2] == '/') {
+        memmove(path, path + 3, strlen(path + 3) + 1);
+    }
+#endif
+    while (path[0] == '/') {
+        memmove(path, path + 1, strlen(path));
+    }
+}
+
 char *io_archive_name(const char *path, int preserve_paths)
 {
     const char *src;
@@ -150,6 +175,7 @@ char *io_archive_name(const char *path, int preserve_paths)
     *w = '\0';
     if (preserve_paths) {
         strip_leading_current_dir(out);
+        strip_leading_root(out);
     }
 
     if ((preserve_paths && !io_is_safe_path(out)) || (!preserve_paths && !io_is_plain_name(out))) {

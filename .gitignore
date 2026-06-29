@@ -4,5 +4,7 @@
 *.lib
 *.pdb
 *.pak
+/pak
+out/
 fuzz/bin/
 fuzz/corpus/
