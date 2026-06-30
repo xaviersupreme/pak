@@ -45,6 +45,6 @@ if ($Target -eq 'test') {
         exit 1
     }
 
-    & $python.Exe @($python.Args + @('tests/test_cli.py', '--pak', '.\pak.exe'))
+    & $python.Exe @($python.Args + @('dev/tests/test_cli.py', '--pak', '.\pak.exe'))
     exit $LASTEXITCODE
 }

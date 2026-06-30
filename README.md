@@ -26,17 +26,7 @@ Windows fallback w/o make:
 .\make.ps1
 ```
 
-Run the CLI regression tests:
-
-```sh
-make test
-```
-
-Windows fallback:
-
-```powershell
-.\make.ps1 test
-```
+Development notes are in [docs/development.md](docs/development.md).
 
 <!-- ## releases
 
@@ -187,35 +177,4 @@ A pattern ending in `/` skips a folder. A pattern without `/` matches the file n
 
 Current archives are `PAK2`.
 
-Each entry stores:
-
-* name
-* original size
-* stored size
-* method: `store`, `rle`, or `deflate`
-* CRC32
-* raw entry bytes
-
-## fuzzing (for development)
-
-Simple smoke test:
-
-```sh
-make fuzz
-```
-
-Seeded LLVM libFuzzer run:
-
-```sh
-make fuzz-run
-```
-
-Useful variables:
-
-```sh
-make fuzz FUZZ_ITERS=100000
-make fuzz-run-libfuzzer FUZZ_CC=clang FUZZ_SANITIZERS=fuzzer,address
-./fuzz/bin/archive_fuzz fuzz/corpus/archive -max_total_time=300
-```
-
-On Windows, `FUZZ_SANITIZERS=fuzzer` is the normal. On Linux or macOS, `fuzzer,address` is the normal.
+The archive layout is described in [docs/archive-format.md](docs/archive-format.md).

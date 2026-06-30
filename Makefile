@@ -40,11 +40,14 @@ BUILD_DIR = build/$(HOST)
 OBJ = $(SRC:%.c=$(BUILD_DIR)/%.o)
 BIN = pak
 FUZZ_CC ?= clang
-FUZZ_DIR = fuzz
+DEV_DIR = dev
+TEST_SCRIPT = $(DEV_DIR)/tests/test_cli.py
+FUZZ_DIR = $(DEV_DIR)/fuzz
+FUZZ_SRC = $(FUZZ_DIR)/archive_fuzz.c
 FUZZ_BIN_DIR = $(FUZZ_DIR)/bin
 FUZZ_CORPUS_DIR = $(FUZZ_DIR)/corpus/archive
-FUZZ_BIN_DIR_WIN = fuzz\bin
-FUZZ_CORPUS_DIR_WIN = fuzz\corpus\archive
+FUZZ_BIN_DIR_WIN = dev\fuzz\bin
+FUZZ_CORPUS_DIR_WIN = dev\fuzz\corpus\archive
 FUZZ_BIN = $(FUZZ_BIN_DIR)/archive_fuzz
 
 ifeq ($(OS),Windows_NT)
@@ -75,25 +78,25 @@ $(BIN): $(OBJ)
 
 test: $(BIN)
 	$(if $(strip $(PYTHON)),,$(error no Python 3 found. install Python 3 or run make PYTHON=/path/to/python test))
-	$(PYTHON) tests/test_cli.py --pak $(TEST_PAK)
+	$(PYTHON) $(TEST_SCRIPT) --pak $(TEST_PAK)
 
 fuzz: fuzz-smoke
 
-fuzz-libfuzzer: fuzz/archive_fuzz.c $(LIB_SRC) include/pak.h
+fuzz-libfuzzer: $(FUZZ_SRC) $(LIB_SRC) include/pak.h
 ifeq ($(OS),Windows_NT)
 	-if not exist $(FUZZ_BIN_DIR_WIN) mkdir $(FUZZ_BIN_DIR_WIN)
 else
 	mkdir -p $(FUZZ_BIN_DIR)
 endif
-	$(FUZZ_CC) $(CPPFLAGS) $(CFLAGS) $(FUZZ_FLAGS) fuzz/archive_fuzz.c $(LIB_SRC) $(FUZZ_LDLIBS) -o $(FUZZ_BIN)
+	$(FUZZ_CC) $(CPPFLAGS) $(CFLAGS) $(FUZZ_FLAGS) $(FUZZ_SRC) $(LIB_SRC) $(FUZZ_LDLIBS) -o $(FUZZ_BIN)
 
-fuzz-smoke: fuzz/archive_fuzz.c $(LIB_SRC) include/pak.h
+fuzz-smoke: $(FUZZ_SRC) $(LIB_SRC) include/pak.h
 ifeq ($(OS),Windows_NT)
 	-if not exist $(FUZZ_BIN_DIR_WIN) mkdir $(FUZZ_BIN_DIR_WIN)
 else
 	mkdir -p $(FUZZ_BIN_DIR)
 endif
-	$(CC) $(CPPFLAGS) $(CFLAGS) -DPAK_FUZZ_STANDALONE fuzz/archive_fuzz.c $(LIB_SRC) -o $(FUZZ_SMOKE_BIN)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -DPAK_FUZZ_STANDALONE $(FUZZ_SRC) $(LIB_SRC) -o $(FUZZ_SMOKE_BIN)
 	$(FUZZ_SMOKE_BIN) $(FUZZ_ITERS)
 
 ifeq ($(OS),Windows_NT)
@@ -130,13 +133,13 @@ clean:
 	-cmd /C "if exist build rmdir /S /Q build & if exist pak.exe del /Q pak.exe & if exist pak del /Q pak"
 	-cmd /C "for /R src %%F in (*.o) do del /Q %%F"
 	-cmd /C "for /R vendor %%F in (*.o) do del /Q %%F"
-	-cmd /C "if exist fuzz\bin rmdir /S /Q fuzz\bin & if exist fuzz\corpus rmdir /S /Q fuzz\corpus"
+	-cmd /C "if exist dev\fuzz\bin rmdir /S /Q dev\fuzz\bin & if exist dev\fuzz\corpus rmdir /S /Q dev\fuzz\corpus"
 else
 clean:
 	rm -f $(BIN) $(FUZZ_BIN) $(FUZZ_SMOKE_BIN)
 	rm -rf build
 	find src vendor -name '*.o' -delete
-	rm -rf $(FUZZ_BIN_DIR) fuzz/corpus
+	rm -rf $(FUZZ_BIN_DIR) $(FUZZ_DIR)/corpus
 endif
 
 .PHONY: all clean test fuzz fuzz-libfuzzer fuzz-run fuzz-run-libfuzzer fuzz-seed fuzz-smoke

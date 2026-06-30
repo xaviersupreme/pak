@@ -22,8 +22,11 @@ static int stdin_is_tty(void)
 #endif
 struct check_report {
     struct old_entry_ref *entries;
+    struct check_issue *issues;
     uint32_t entry_count;
     uint32_t entry_capacity;
+    uint32_t issue_count;
+    uint32_t issue_capacity;
     uint32_t expected_count;
     uint32_t damaged_count;
     uint32_t salvaged_count;
@@ -33,6 +36,98 @@ struct check_report {
     uint64_t stored_size;
     int version;
 };
+
+struct check_issue {
+    uint32_t index;
+    uint64_t offset;
+    char target[96];
+    char reason[96];
+    char action[48];
+};
+
+static const char *check_out_clr(const char *code)
+{
+    return pak_clr(stdout, code);
+}
+
+static const char *check_err_clr(const char *code)
+{
+    return pak_clr(stderr, code);
+}
+
+static void format_check_size(char *buf, size_t buf_size, uint64_t bytes)
+{
+    static const char *units[] = { "B", "KiB", "MiB", "GiB", "TiB" };
+    double value = (double)bytes;
+    int unit = 0;
+
+    while (value >= 1024.0 && unit < 4) {
+        value /= 1024.0;
+        unit++;
+    }
+
+    if (unit == 0) {
+        snprintf(buf, buf_size, "%llu B", (unsigned long long)bytes);
+    } else {
+        snprintf(buf, buf_size, "%.1f %s", value, units[unit]);
+    }
+}
+
+static void copy_report_text(char *dst, size_t dst_size, const char *src)
+{
+    size_t len;
+
+    if (dst_size == 0) {
+        return;
+    }
+    if (src == NULL) {
+        dst[0] = '\0';
+        return;
+    }
+
+    len = strlen(src);
+    if (len < dst_size) {
+        memcpy(dst, src, len + 1);
+        return;
+    }
+
+    if (dst_size <= 4) {
+        memcpy(dst, "...", dst_size - 1);
+        dst[dst_size - 1] = '\0';
+        return;
+    }
+
+    memcpy(dst, src, dst_size - 4);
+    memcpy(dst + dst_size - 4, "...", 4);
+}
+
+static int check_report_add_issue(struct check_report *report, uint32_t index, uint64_t offset, const char *target, const char *reason, const char *action)
+{
+    struct check_issue *grown;
+    uint32_t new_capacity;
+    struct check_issue *issue;
+
+    if (report->issue_count == report->issue_capacity) {
+        new_capacity = report->issue_capacity == 0 ? 8 : report->issue_capacity * 2;
+        if (new_capacity < report->issue_capacity) {
+            return -1;
+        }
+        grown = realloc(report->issues, (size_t)new_capacity * sizeof(*report->issues));
+        if (grown == NULL) {
+            return -1;
+        }
+        report->issues = grown;
+        report->issue_capacity = new_capacity;
+    }
+
+    issue = &report->issues[report->issue_count++];
+    issue->index = index;
+    issue->offset = offset;
+    copy_report_text(issue->target, sizeof(issue->target), target);
+    copy_report_text(issue->reason, sizeof(issue->reason), reason);
+    copy_report_text(issue->action, sizeof(issue->action), action);
+    return 0;
+}
 
 
 static int copy_recovered_bytes(FILE *in, FILE *out, uint64_t wanted, uint64_t available, uint32_t *crc, uint64_t *wrote, const char *name, const struct pak_options *opts)
@@ -219,6 +314,7 @@ static void check_report_init(struct check_report *report)
 static void check_report_free(struct check_report *report)
 {
     free_old_entry_refs(report->entries, report->entry_count);
+    free(report->issues);
     memset(report, 0, sizeof(*report));
 }
 
@@ -375,25 +471,27 @@ static int check_resync(FILE *archive, struct check_report *report, uint64_t arc
     return 1;
 }
 
-static void check_damage_entry(struct check_report *report, uint32_t index, uint64_t offset, const char *archive_path)
+static int check_damage_entry(struct check_report *report, uint32_t index, uint64_t offset, const char *archive_path, const char *reason)
 {
     report->damaged_count++;
     report->dropped_count++;
-    if (report->expected_count > 0) {
-        diag_error("damaged entry %u/%u in '%s' at offset %llu", index, report->expected_count, archive_path, (unsigned long long)offset);
-    } else {
-        diag_error("damaged entry in '%s' at offset %llu", archive_path, (unsigned long long)offset);
-    }
+    return check_report_add_issue(report, index, offset, archive_path, reason, "drop entry");
 }
 
-static void check_damage_data(struct check_report *report, uint32_t index, const struct pak_entry *entry, uint64_t offset)
+static int check_damage_data(struct check_report *report, uint32_t index, const struct pak_entry *entry, uint64_t offset, const char *reason)
 {
     report->damaged_count++;
-    if (report->expected_count > 0) {
-        diag_error("damaged data for '%s' (%u/%u) at offset %llu", entry->name, index, report->expected_count, (unsigned long long)offset);
-    } else {
-        diag_error("damaged data for '%s' at offset %llu", entry->name, (unsigned long long)offset);
-    }
+    return check_report_add_issue(report, index, offset, entry->name, reason, "salvage if readable");
+}
+
+static int check_damage_gap(struct check_report *report, uint64_t offset, uint64_t size, const char *target)
+{
+    char reason[96];
+
+    report->damaged_count++;
+    report->dropped_count++;
+    snprintf(reason, sizeof(reason), "%llu unreadable byte%s", (unsigned long long)size, size == 1 ? "" : "s");
+    return check_report_add_issue(report, 0, offset, target, reason, "drop bytes");
 }
 
 static int check_report_add_salvage_entry(struct check_report *report, struct pak_entry *entry, uint64_t data_offset, uint64_t archive_size, uint64_t limit)
@@ -424,7 +522,7 @@ static int check_report_add_salvage_entry(struct check_report *report, struct pa
 
 static int check_scan_entries(FILE *archive, struct check_report *report, uint64_t archive_size, const struct pak_options *opts)
 {
-    uint64_t pos = 0;
+    uint64_t pos = archive_size > 8 ? 8 : 0;
 
     report->version = 2;
     log_step(opts, "scan for recoverable PAK2 entries");
@@ -439,7 +537,14 @@ static int check_scan_entries(FILE *archive, struct check_report *report, uint64
             return -1;
         }
         if (found == 0) {
+            if (pos < archive_size && check_damage_gap(report, pos, archive_size - pos, "archive gap") != 0) {
+                return -1;
+            }
             break;
+        }
+        if (found_pos > pos && check_damage_gap(report, pos, found_pos - pos, "archive gap") != 0) {
+            free_entry(&ref.entry);
+            return -1;
         }
         log_step(opts, "recovered %s at offset %llu", ref.entry.name, (unsigned long long)found_pos);
         if (check_report_add_entry(report, &ref.entry, ref.data_offset, REPAIR_COPY, ref.entry.stored_size) != 0) {
@@ -474,7 +579,10 @@ static int check_archive_collect(const char *archive_path, const struct pak_opti
     }
     if (read_archive_header(archive, &report->version, &report->expected_count) != 0) {
         report->damaged_count++;
-        diag_error("bad archive header in '%s'", archive_path);
+        if (check_report_add_issue(report, 0, 0, archive_path, "archive header is unreadable", "scan for entries") != 0) {
+            fclose(archive);
+            return -1;
+        }
         if (check_scan_entries(archive, report, archive_size, opts) != 0) {
             fclose(archive);
             return -1;
@@ -497,13 +605,19 @@ static int check_archive_collect(const char *archive_path, const struct pak_opti
         next_pos = 0;
         if (pak_file_tell(archive, &header_pos) != 0 || header_pos >= archive_size) {
             if (report->entry_count + report->damaged_count < report->expected_count) {
-                check_damage_entry(report, i + 1, 0, archive_path);
+                if (check_damage_entry(report, i + 1, 0, archive_path, "entry header is missing") != 0) {
+                    fclose(archive);
+                    return -1;
+                }
             }
             break;
         }
 
         if (read_entry_header(archive, report->version, &entry) != 0) {
-            check_damage_entry(report, i + 1, header_pos, archive_path);
+            if (check_damage_entry(report, i + 1, header_pos, archive_path, "entry header is unreadable") != 0) {
+                fclose(archive);
+                return -1;
+            }
             recovered = check_resync(archive, report, archive_size, header_pos + 1, i + 1, opts, &match_pos, &next_pos);
             if (recovered < 0) {
                 fclose(archive);
@@ -516,7 +630,11 @@ static int check_archive_collect(const char *archive_path, const struct pak_opti
         }
 
         if (pak_file_tell(archive, &data_offset) != 0) {
-            check_damage_data(report, i + 1, &entry, header_pos);
+            if (check_damage_data(report, i + 1, &entry, header_pos, "entry data offset is unreadable") != 0) {
+                free_entry(&entry);
+                fclose(archive);
+                return -1;
+            }
             recovered = check_resync(archive, report, archive_size, header_pos + 1, i + 1, opts, &match_pos, &next_pos);
             free_entry(&entry);
             if (recovered < 0) {
@@ -535,7 +653,11 @@ static int check_archive_collect(const char *archive_path, const struct pak_opti
 
             memset(&sync_ref, 0, sizeof(sync_ref));
             limit = archive_size;
-            check_damage_data(report, i + 1, &entry, data_offset);
+            if (check_damage_data(report, i + 1, &entry, data_offset, "entry data is truncated") != 0) {
+                free_entry(&entry);
+                fclose(archive);
+                return -1;
+            }
             recovered = find_valid_entry_from(archive, report->version, header_pos + 1, archive_size, opts, &sync_ref, &match_pos, &next_pos);
             if (recovered < 0) {
                 free_entry(&entry);
@@ -577,7 +699,11 @@ static int check_archive_collect(const char *archive_path, const struct pak_opti
 
             memset(&sync_ref, 0, sizeof(sync_ref));
             limit = data_end;
-            check_damage_data(report, i + 1, &entry, data_offset);
+            if (check_damage_data(report, i + 1, &entry, data_offset, "entry failed decompression or crc") != 0) {
+                free_entry(&entry);
+                fclose(archive);
+                return -1;
+            }
             recovered = find_valid_entry_from(archive, report->version, data_offset + 1, archive_size, opts, &sync_ref, &match_pos, &next_pos);
             if (recovered == 0 && data_end < archive_size) {
                 recovered = find_valid_entry_from(archive, report->version, data_end, archive_size, opts, &sync_ref, &match_pos, &next_pos);
@@ -639,10 +765,16 @@ static int check_archive_collect(const char *archive_path, const struct pak_opti
     }
     if (pos < archive_size) {
         report->damaged_count++;
-        diag_error("archive has %llu trailing byte%s", (unsigned long long)(archive_size - pos), archive_size - pos == 1 ? "" : "s");
+        if (check_report_add_issue(report, 0, pos, "archive end", "trailing junk after last entry", "strip bytes") != 0) {
+            fclose(archive);
+            return -1;
+        }
     } else if (pos > archive_size) {
         report->damaged_count++;
-        diag_error("bad archive '%s'", archive_path);
+        if (check_report_add_issue(report, 0, archive_size, archive_path, "entry sizes point past end of file", "repair layout") != 0) {
+            fclose(archive);
+            return -1;
+        }
     }
 
     fclose(archive);
@@ -651,11 +783,72 @@ static int check_archive_collect(const char *archive_path, const struct pak_opti
 
 static void print_check_ok(const struct check_report *report)
 {
-    printf("ok: checked %u file%s, %llu stored bytes, %llu unpacked bytes", report->entry_count, report->entry_count == 1 ? "" : "s", (unsigned long long)report->stored_size, (unsigned long long)report->unpacked_size);
+    char stored[32];
+    char unpacked[32];
+
+    format_check_size(stored, sizeof(stored), report->stored_size);
+    format_check_size(unpacked, sizeof(unpacked), report->unpacked_size);
+    printf("%sok:%s checked %s%u%s file%s, %s%s%s stored, %s%s%s unpacked", check_out_clr(PAK_CLR_BOLD PAK_CLR_GREEN), check_out_clr(PAK_CLR_RESET), check_out_clr(PAK_CLR_BOLD), report->entry_count, check_out_clr(PAK_CLR_RESET), report->entry_count == 1 ? "" : "s", check_out_clr(PAK_CLR_GREEN), stored, check_out_clr(PAK_CLR_RESET), check_out_clr(PAK_CLR_GREEN), unpacked, check_out_clr(PAK_CLR_RESET));
     if (report->compressed_count > 0) {
         printf(", %u compressed", report->compressed_count);
     }
     putchar('\n');
+}
+
+static void print_check_report_line(const char *label, const char *value, const char *color)
+{
+    printf("  %s%-8s%s %s%s%s\n", check_out_clr(PAK_CLR_CYAN), label, check_out_clr(PAK_CLR_RESET), check_out_clr(color), value, check_out_clr(PAK_CLR_RESET));
+}
+
+static void print_check_damage_report(const struct check_report *report, const char *out_path)
+{
+    uint32_t clean_count;
+    char stored[32];
+    char unpacked[32];
+    char value[128];
+    uint32_t i;
+
+    if (report->issue_count == 0) {
+        return;
+    }
+
+    clean_count = report->entry_count - report->salvaged_count;
+    format_check_size(stored, sizeof(stored), report->stored_size);
+    format_check_size(unpacked, sizeof(unpacked), report->unpacked_size);
+
+    log_finish_progress();
+    printf("%scheck report%s\n", check_out_clr(PAK_CLR_BOLD PAK_CLR_CYAN), check_out_clr(PAK_CLR_RESET));
+    printf("------------\n");
+    snprintf(value, sizeof(value), "%u expected, %u readable", report->expected_count, report->entry_count);
+    print_check_report_line("entries", value, PAK_CLR_BOLD);
+    snprintf(value, sizeof(value), "%u issue%s", report->damaged_count, report->damaged_count == 1 ? "" : "s");
+    print_check_report_line("damage", value, PAK_CLR_RED);
+    snprintf(value, sizeof(value), "%s stored, %s unpacked", stored, unpacked);
+    print_check_report_line("size", value, PAK_CLR_GREEN);
+
+    printf("\n%sdamage%s\n", check_out_clr(PAK_CLR_BOLD PAK_CLR_RED), check_out_clr(PAK_CLR_RESET));
+    for (i = 0; i < report->issue_count; i++) {
+        const struct check_issue *issue = &report->issues[i];
+
+        if (issue->index > 0 && report->expected_count > 0) {
+            printf("  %s%u/%u%s  %s%s%s\n", check_out_clr(PAK_CLR_DIM), issue->index, report->expected_count, check_out_clr(PAK_CLR_RESET), check_out_clr(PAK_CLR_BOLD), issue->target, check_out_clr(PAK_CLR_RESET));
+        } else if (issue->index > 0) {
+            printf("  %s%u%s  %s%s%s\n", check_out_clr(PAK_CLR_DIM), issue->index, check_out_clr(PAK_CLR_RESET), check_out_clr(PAK_CLR_BOLD), issue->target, check_out_clr(PAK_CLR_RESET));
+        } else {
+            printf("  %s%s%s\n", check_out_clr(PAK_CLR_BOLD), issue->target, check_out_clr(PAK_CLR_RESET));
+        }
+        printf("      %sreason%s  %s at offset %llu\n", check_out_clr(PAK_CLR_CYAN), check_out_clr(PAK_CLR_RESET), issue->reason, (unsigned long long)issue->offset);
+        printf("      %srepair%s  %s\n", check_out_clr(PAK_CLR_CYAN), check_out_clr(PAK_CLR_RESET), issue->action);
+    }
+
+    printf("\n%srepair plan%s\n", check_out_clr(PAK_CLR_BOLD PAK_CLR_CYAN), check_out_clr(PAK_CLR_RESET));
+    snprintf(value, sizeof(value), "%u clean, %u salvaged, %u dropped", clean_count, report->salvaged_count, report->dropped_count);
+    print_check_report_line("entries", value, PAK_CLR_BOLD);
+    if (report->entry_count == 0) {
+        print_check_report_line("output", "none", PAK_CLR_RED);
+    } else {
+        print_check_report_line("output", out_path, PAK_CLR_GREEN);
+    }
 }
 
 static int archive_ascii_lower(int ch)
@@ -697,13 +890,14 @@ static int prompt_repair(const char *out_path, const struct check_report *report
 {
     char answer[32];
 
+    (void)report;
     if (!stdin_is_tty()) {
-        diag_hint("rerun in a terminal to attempt repair");
+        printf("\n%s%-8s%s rerun in a terminal to attempt repair\n", check_out_clr(PAK_CLR_YELLOW), "hint", check_out_clr(PAK_CLR_RESET));
+        fflush(stdout);
         return 0;
     }
 
-    fprintf(stderr, "repair: %u clean, %u salvaged, %u dropped\n", report->entry_count - report->salvaged_count, report->salvaged_count, report->dropped_count);
-    fprintf(stderr, "repair: write recovered archive to '%s'? [Y/n] ", out_path);
+    fprintf(stderr, "%srepair:%s write recovered archive to %s'%s'%s? [Y/n] ", check_err_clr(PAK_CLR_BOLD PAK_CLR_CYAN), check_err_clr(PAK_CLR_RESET), check_err_clr(PAK_CLR_GREEN), out_path, check_err_clr(PAK_CLR_RESET));
     fflush(stderr);
     if (fgets(answer, sizeof(answer), stdin) == NULL) {
         return 0;
@@ -801,6 +995,7 @@ int pak_check(const char *archive_path, const struct pak_options *opts)
         diag_error("out of memory");
         return -1;
     }
+    print_check_damage_report(&report, out_path);
     if (report.entry_count == 0) {
         free(out_path);
         check_report_free(&report);
@@ -817,7 +1012,7 @@ int pak_check(const char *archive_path, const struct pak_options *opts)
     if (write_repaired_archive(archive_path, out_path, &report, opts) == 0) {
         if (check_archive_collect(out_path, opts, &repaired_report) == 0 && repaired_report.damaged_count == 0) {
             print_check_ok(&repaired_report);
-            printf("repaired: wrote %s (%u clean, %u salvaged, %u dropped)\n", out_path, report.entry_count - report.salvaged_count, report.salvaged_count, report.dropped_count);
+            printf("%srepaired:%s wrote %s%s%s (%u clean, %u salvaged, %u dropped)\n", check_out_clr(PAK_CLR_BOLD PAK_CLR_GREEN), check_out_clr(PAK_CLR_RESET), check_out_clr(PAK_CLR_GREEN), out_path, check_out_clr(PAK_CLR_RESET), report.entry_count - report.salvaged_count, report.salvaged_count, report.dropped_count);
             rc = 0;
         } else {
             diag_error("repaired archive is still damaged");

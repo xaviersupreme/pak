@@ -2,6 +2,7 @@
 import argparse
 import os
 import re
+import struct
 import subprocess
 import sys
 import tempfile
@@ -215,11 +216,68 @@ def test_repack_and_compression_smart_skip(pak, root):
     check(methods.get("fake.png") == "deflate", "--no-smart-compress did not bypass extension skip")
 
 
+def test_check_damage_report(pak, root):
+    cwd = root / "check"
+    cwd.mkdir()
+    write_text(cwd / "alpha.txt", "alpha\n")
+    write_text(cwd / "beta.txt", "beta\n")
+
+    archive = cwd / "broken.pak"
+    run_pak(pak, cwd, "make", archive, "alpha.txt", "beta.txt")
+
+    with archive.open("ab") as fp:
+        fp.write(b"junk after archive")
+
+    checked = run_pak(pak, cwd, "check", archive, check_rc=False)
+    combined = checked.stdout + checked.stderr
+    check(checked.returncode != 0, "corrupt archive should fail check")
+    check("check report" in checked.stdout, "damaged check did not print a report")
+    check("damage" in checked.stdout, "damaged check did not list damage")
+    check("repair plan" in checked.stdout, "damaged check did not print a repair plan")
+    check("archive end" in combined, "damaged check did not name the damaged archive area")
+    check("rerun in a terminal to attempt repair" in combined, "noninteractive repair hint was missing")
+
+
+def test_check_reports_multiple_scan_issues(pak, root):
+    cwd = root / "check-multiple"
+    cwd.mkdir()
+    write_text(cwd / "alpha.txt", "alpha\n")
+    write_text(cwd / "bravo.txt", "bravo\n")
+    write_text(cwd / "charlie.txt", "charlie\n")
+
+    archive = cwd / "broken.pak"
+    run_pak(pak, cwd, "make", archive, "alpha.txt", "bravo.txt", "charlie.txt")
+
+    data = bytearray(archive.read_bytes())
+    data[0] = ord("X")
+    pos = 8
+    payload_offsets = []
+    for _ in range(3):
+        name_len, flags, size, stored_size, _crc = struct.unpack_from("<IIQQI", data, pos)
+        pos += 28 + name_len
+        payload_offsets.append((pos, stored_size))
+        pos += stored_size
+        check(flags == 0 and size == stored_size, "test archive should use stored entries")
+    offset, stored_size = payload_offsets[1]
+    check(stored_size >= 4, "second test payload was too small")
+    del data[offset + 1 : offset + 3]
+    archive.write_bytes(data)
+
+    checked = run_pak(pak, cwd, "check", archive, check_rc=False)
+    combined = checked.stdout + checked.stderr
+    check(checked.returncode != 0, "multi-corrupt archive should fail check")
+    check("2 issues" in checked.stdout or "3 issues" in checked.stdout, "check did not report multiple issues\n" + combined)
+    check("archive header is unreadable" in combined, "check did not report the bad archive header")
+    check("archive gap" in combined, "check did not report the damaged byte gap")
+
+
 TESTS = [
     ("core command flow", test_core_command_flow),
     ("directory, wildcard, mixed input flow", test_directory_wildcards_and_mixed_inputs),
     ("absolute file and directory naming", test_absolute_file_and_directory_names),
     ("repack and compression smart-skip flow", test_repack_and_compression_smart_skip),
+    ("check damage report", test_check_damage_report),
+    ("check multiple scan issues", test_check_reports_multiple_scan_issues),
 ]
 
 

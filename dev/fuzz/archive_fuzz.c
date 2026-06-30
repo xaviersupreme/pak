@@ -85,6 +85,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
     opts.quiet = 1;
     opts.preserve_paths = 0;
     opts.compress = 0;
+    opts.smart_compress = 1;
     opts.store = 0;
     opts.compression_level = PAK_DEFAULT_COMPRESSION_LEVEL;
     opts.long_list = 0;

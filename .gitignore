@@ -7,5 +7,5 @@
 /pak
 build/
 out/
-fuzz/bin/
-fuzz/corpus/
+dev/fuzz/bin/
+dev/fuzz/corpus/
