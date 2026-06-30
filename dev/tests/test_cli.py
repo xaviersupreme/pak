@@ -67,6 +67,125 @@ def run_pak(pak, cwd, *args, check_rc=True):
     return result
 
 
+def run_pak_tty(pak, cwd, *args, input_text="y\n", timeout=10):
+    if os.name == "nt":
+        return None
+
+    import errno
+    import pty
+    import select
+    import time
+
+    env = os.environ.copy()
+    env["NO_COLOR"] = "1"
+    env.pop("FORCE_COLOR", None)
+
+    master, slave = pty.openpty()
+    proc = subprocess.Popen(
+        [str(pak), *[str(arg) for arg in args]],
+        cwd=str(cwd),
+        env=env,
+        stdin=slave,
+        stdout=slave,
+        stderr=slave,
+        close_fds=True,
+    )
+    os.close(slave)
+
+    output = bytearray()
+    sent_input = False
+    deadline = time.time() + timeout
+    while True:
+        if time.time() > deadline:
+            proc.kill()
+            os.close(master)
+            fail("pak {0} timed out in tty run\noutput:\n{1}".format(" ".join(str(arg) for arg in args), output.decode(errors="replace")))
+
+        ready, _, _ = select.select([master], [], [], 0.1)
+        if ready:
+            try:
+                chunk = os.read(master, 4096)
+            except OSError as exc:
+                if exc.errno != errno.EIO:
+                    os.close(master)
+                    raise
+                chunk = b""
+
+            if chunk:
+                output.extend(chunk)
+                if input_text is not None and not sent_input and b"[Y/n]" in output:
+                    os.write(master, input_text.encode("utf-8"))
+                    sent_input = True
+            elif proc.poll() is not None:
+                break
+
+        if proc.poll() is not None:
+            while True:
+                ready, _, _ = select.select([master], [], [], 0)
+                if not ready:
+                    break
+                try:
+                    chunk = os.read(master, 4096)
+                except OSError:
+                    break
+                if not chunk:
+                    break
+                output.extend(chunk)
+            break
+
+    os.close(master)
+    return subprocess.CompletedProcess([str(pak), *[str(arg) for arg in args]], proc.returncode, output.decode(errors="replace"), "")
+
+
+def pak2_entries(path):
+    data = bytearray(path.read_bytes())
+    check(data[:4] == b"PAK2", "test archive is not PAK2")
+    count = struct.unpack_from("<I", data, 4)[0]
+    pos = 8
+    entries = []
+    for _ in range(count):
+        header_offset = pos
+        name_len, flags, size, stored_size, checksum = struct.unpack_from("<IIQQI", data, pos)
+        name_offset = pos + 28
+        data_offset = name_offset + name_len
+        name = data[name_offset:data_offset].decode("utf-8")
+        entries.append(
+            {
+                "name": name,
+                "flags": flags,
+                "size": size,
+                "stored_size": stored_size,
+                "checksum": checksum,
+                "header_offset": header_offset,
+                "crc_offset": pos + 24,
+                "data_offset": data_offset,
+                "data_end": data_offset + stored_size,
+            }
+        )
+        pos = data_offset + stored_size
+    return data, entries
+
+
+def make_check_archive(pak, cwd, archive_name):
+    write_text(cwd / "alpha.txt", "alpha\n")
+    write_text(cwd / "bravo.txt", "bravo\n")
+    write_text(cwd / "charlie.txt", "charlie\n")
+    archive = cwd / archive_name
+    run_pak(pak, cwd, "make", archive, "alpha.txt", "bravo.txt", "charlie.txt")
+    return archive
+
+
+def assert_damaged_check(pak, cwd, archive, *needles):
+    checked = run_pak(pak, cwd, "check", archive, check_rc=False)
+    combined = checked.stdout + checked.stderr
+    check(checked.returncode != 0, "corrupt archive should fail check")
+    check("check report" in checked.stdout, "damaged check did not print a report\n" + combined)
+    check("repair plan" in checked.stdout, "damaged check did not print a repair plan\n" + combined)
+    for needle in needles:
+        check(needle in combined, "damaged check did not report {0!r}\n{1}".format(needle, combined))
+    return checked
+
+
 def list_names(pak, cwd, archive, *patterns):
     result = run_pak(pak, cwd, "list", archive, *patterns)
     names = []
@@ -238,6 +357,42 @@ def test_check_damage_report(pak, root):
     check("rerun in a terminal to attempt repair" in combined, "noninteractive repair hint was missing")
 
 
+def test_check_corruption_cases(pak, root):
+    cwd = root / "check-cases"
+    cwd.mkdir()
+
+    header = make_check_archive(pak, cwd, "bad-header.pak")
+    data, _entries = pak2_entries(header)
+    data[0] = ord("X")
+    header.write_bytes(data)
+    assert_damaged_check(pak, cwd, header, "archive header is unreadable")
+
+    truncated = make_check_archive(pak, cwd, "truncated.pak")
+    data, entries = pak2_entries(truncated)
+    del data[entries[-1]["data_offset"] + 2 :]
+    truncated.write_bytes(data)
+    assert_damaged_check(pak, cwd, truncated, "charlie.txt", "entry data is truncated")
+
+    deleted = make_check_archive(pak, cwd, "deleted-middle.pak")
+    data, entries = pak2_entries(deleted)
+    check(entries[1]["stored_size"] >= 4, "second test payload was too small")
+    del data[entries[1]["data_offset"] + 1 : entries[1]["data_offset"] + 3]
+    deleted.write_bytes(data)
+    assert_damaged_check(pak, cwd, deleted, "bravo.txt", "entry failed decompression or crc")
+
+    trailing = make_check_archive(pak, cwd, "trailing.pak")
+    with trailing.open("ab") as fp:
+        fp.write(b"junk after archive")
+    assert_damaged_check(pak, cwd, trailing, "archive end", "trailing junk after last entry")
+
+    bad_crc = make_check_archive(pak, cwd, "bad-crc.pak")
+    data, entries = pak2_entries(bad_crc)
+    old_crc = struct.unpack_from("<I", data, entries[0]["crc_offset"])[0]
+    struct.pack_into("<I", data, entries[0]["crc_offset"], old_crc ^ 0xFFFFFFFF)
+    bad_crc.write_bytes(data)
+    assert_damaged_check(pak, cwd, bad_crc, "alpha.txt", "entry failed decompression or crc")
+
+
 def test_check_reports_multiple_scan_issues(pak, root):
     cwd = root / "check-multiple"
     cwd.mkdir()
@@ -271,13 +426,36 @@ def test_check_reports_multiple_scan_issues(pak, root):
     check("archive gap" in combined, "check did not report the damaged byte gap")
 
 
+def test_check_repair_writes_clean_archive(pak, root):
+    if os.name == "nt":
+        return
+
+    cwd = root / "check-repair"
+    cwd.mkdir()
+    archive = make_check_archive(pak, cwd, "repair.pak")
+    with archive.open("ab") as fp:
+        fp.write(b"junk after archive")
+
+    repaired = cwd / "repair.repaired.pak"
+    result = run_pak_tty(pak, cwd, "check", archive, input_text="y\n")
+    check(result is not None, "tty repair test needs pty support")
+    check(result.returncode == 0, "repair check failed\nstdout:\n{0}".format(result.stdout))
+    check(repaired.exists(), "repair did not write repaired archive")
+    check("repaired: wrote" in result.stdout, "repair did not report repaired output\n" + result.stdout)
+
+    checked = run_pak(pak, cwd, "check", repaired)
+    check("ok: checked 3 files" in checked.stdout, "repaired archive did not pass check")
+
+
 TESTS = [
     ("core command flow", test_core_command_flow),
     ("directory, wildcard, mixed input flow", test_directory_wildcards_and_mixed_inputs),
     ("absolute file and directory naming", test_absolute_file_and_directory_names),
     ("repack and compression smart-skip flow", test_repack_and_compression_smart_skip),
     ("check damage report", test_check_damage_report),
+    ("check corruption cases", test_check_corruption_cases),
     ("check multiple scan issues", test_check_reports_multiple_scan_issues),
+    ("check repair writes clean archive", test_check_repair_writes_clean_archive),
 ]
 
 
