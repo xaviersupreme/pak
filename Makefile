@@ -16,6 +16,9 @@ ifeq ($(OS),Windows_NT)
 HOST = windows
 PYTHON_CANDIDATES = python python3
 TEST_PAK = .\$(BIN)
+ifeq ($(strip $(MSYSTEM)),)
+WINDOWS_CMD_SHELL = 1
+endif
 else
 HOST = unix
 PYTHON_CANDIDATES = python3 python
@@ -54,7 +57,7 @@ ifeq ($(OS),Windows_NT)
 BIN := pak.exe
 FUZZ_BIN := $(FUZZ_BIN_DIR)/archive_fuzz.exe
 DEFAULT_FUZZ_SANITIZERS = fuzzer
-FUZZ_RUNTIME_DIR := $(shell $(FUZZ_CC) --print-resource-dir)/lib/windows
+FUZZ_RUNTIME_DIR = $(shell $(FUZZ_CC) --print-resource-dir 2>NUL)/lib/windows
 DEFAULT_FUZZ_LDLIBS = "$(FUZZ_RUNTIME_DIR)/clang_rt.stats-x86_64.lib" -lShell32 -lDbghelp -lmincore
 else
 DEFAULT_FUZZ_SANITIZERS = fuzzer,address
@@ -83,7 +86,7 @@ test: $(BIN)
 fuzz: fuzz-smoke
 
 fuzz-libfuzzer: $(FUZZ_SRC) $(LIB_SRC) include/pak.h
-ifeq ($(OS),Windows_NT)
+ifeq ($(WINDOWS_CMD_SHELL),1)
 	-if not exist $(FUZZ_BIN_DIR_WIN) mkdir $(FUZZ_BIN_DIR_WIN)
 else
 	mkdir -p $(FUZZ_BIN_DIR)
@@ -91,7 +94,7 @@ endif
 	$(FUZZ_CC) $(CPPFLAGS) $(CFLAGS) $(FUZZ_FLAGS) $(FUZZ_SRC) $(LIB_SRC) $(FUZZ_LDLIBS) -o $(FUZZ_BIN)
 
 fuzz-smoke: $(FUZZ_SRC) $(LIB_SRC) include/pak.h
-ifeq ($(OS),Windows_NT)
+ifeq ($(WINDOWS_CMD_SHELL),1)
 	-if not exist $(FUZZ_BIN_DIR_WIN) mkdir $(FUZZ_BIN_DIR_WIN)
 else
 	mkdir -p $(FUZZ_BIN_DIR)
@@ -121,7 +124,7 @@ else
 endif
 
 $(BUILD_DIR)/%.o: %.c include/pak.h src/archive/internal.h
-ifeq ($(OS),Windows_NT)
+ifeq ($(WINDOWS_CMD_SHELL),1)
 	-if not exist "$(subst /,\,$(@D))" mkdir "$(subst /,\,$(@D))"
 else
 	mkdir -p $(@D)
