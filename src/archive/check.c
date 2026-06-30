@@ -55,6 +55,11 @@ static const char *check_err_clr(const char *code)
     return pak_clr(stderr, code);
 }
 
+static const char *check_stream_clr(FILE *stream, const char *code)
+{
+    return pak_clr(stream, code);
+}
+
 static void format_check_size(char *buf, size_t buf_size, uint64_t bytes)
 {
     static const char *units[] = { "B", "KiB", "MiB", "GiB", "TiB" };
@@ -800,6 +805,43 @@ static void print_check_report_line(const char *label, const char *value, const 
     printf("  %s%-8s%s %s%s%s\n", check_out_clr(PAK_CLR_CYAN), label, check_out_clr(PAK_CLR_RESET), check_out_clr(color), value, check_out_clr(PAK_CLR_RESET));
 }
 
+static void print_repair_detail_line(FILE *stream, const char *verb, const char *name, const char *note, const char *color)
+{
+    fprintf(stream, "  %s%-7s%s %s%s%s", check_stream_clr(stream, color), verb, check_stream_clr(stream, PAK_CLR_RESET), check_stream_clr(stream, PAK_CLR_BOLD), name, check_stream_clr(stream, PAK_CLR_RESET));
+    if (note != NULL && note[0] != '\0') {
+        fprintf(stream, "  %s%s%s", check_stream_clr(stream, PAK_CLR_DIM), note, check_stream_clr(stream, PAK_CLR_RESET));
+    }
+    fputc('\n', stream);
+}
+
+static void print_repair_details(FILE *stream, const struct check_report *report)
+{
+    uint32_t i;
+
+    fprintf(stream, "\n%srepair details%s\n", check_stream_clr(stream, PAK_CLR_BOLD PAK_CLR_CYAN), check_stream_clr(stream, PAK_CLR_RESET));
+    fprintf(stream, "--------------\n");
+
+    for (i = 0; i < report->entry_count; i++) {
+        const struct old_entry_ref *ref = &report->entries[i];
+
+        if (ref->repair_mode == REPAIR_SALVAGE) {
+            print_repair_detail_line(stream, "salvage", ref->entry.name, "recovered bytes will be padded if needed", PAK_CLR_YELLOW);
+        } else {
+            print_repair_detail_line(stream, "keep", ref->entry.name, "validated", PAK_CLR_GREEN);
+        }
+    }
+
+    for (i = 0; i < report->issue_count; i++) {
+        const struct check_issue *issue = &report->issues[i];
+
+        if (strncmp(issue->action, "drop", 4) == 0) {
+            print_repair_detail_line(stream, "drop", issue->target, issue->reason, PAK_CLR_RED);
+        } else if (strncmp(issue->action, "strip", 5) == 0) {
+            print_repair_detail_line(stream, "strip", issue->target, issue->reason, PAK_CLR_YELLOW);
+        }
+    }
+}
+
 static void print_check_damage_report(const struct check_report *report, const char *out_path)
 {
     uint32_t clean_count;
@@ -848,6 +890,7 @@ static void print_check_damage_report(const struct check_report *report, const c
         print_check_report_line("output", "none", PAK_CLR_RED);
     } else {
         print_check_report_line("output", out_path, PAK_CLR_GREEN);
+        print_check_report_line("details", "press d at the repair prompt", PAK_CLR_YELLOW);
     }
 }
 
@@ -889,20 +932,35 @@ static char *make_repaired_archive_path(const char *archive_path)
 static int prompt_repair(const char *out_path, const struct check_report *report)
 {
     char answer[32];
+    unsigned char ch;
 
-    (void)report;
     if (!stdin_is_tty()) {
         printf("\n%s%-8s%s rerun in a terminal to attempt repair\n", check_out_clr(PAK_CLR_YELLOW), "hint", check_out_clr(PAK_CLR_RESET));
         fflush(stdout);
         return 0;
     }
 
-    fprintf(stderr, "%srepair:%s write recovered archive to %s'%s'%s? [Y/n] ", check_err_clr(PAK_CLR_BOLD PAK_CLR_CYAN), check_err_clr(PAK_CLR_RESET), check_err_clr(PAK_CLR_GREEN), out_path, check_err_clr(PAK_CLR_RESET));
-    fflush(stderr);
-    if (fgets(answer, sizeof(answer), stdin) == NULL) {
-        return 0;
+    for (;;) {
+        fprintf(stderr, "%srepair:%s write recovered archive to %s'%s'%s? [Y/n/d] ", check_err_clr(PAK_CLR_BOLD PAK_CLR_CYAN), check_err_clr(PAK_CLR_RESET), check_err_clr(PAK_CLR_GREEN), out_path, check_err_clr(PAK_CLR_RESET));
+        fflush(stderr);
+        if (fgets(answer, sizeof(answer), stdin) == NULL) {
+            return 0;
+        }
+
+        ch = (unsigned char)answer[0];
+        if (ch == '\n' || ch == '\0' || ch == 'y' || ch == 'Y') {
+            return 1;
+        }
+        if (ch == 'n' || ch == 'N') {
+            fprintf(stderr, "%srepair:%s aborted\n", check_err_clr(PAK_CLR_DIM), check_err_clr(PAK_CLR_RESET));
+            return 0;
+        }
+        if (ch == 'd' || ch == 'D') {
+            print_repair_details(stderr, report);
+            continue;
+        }
+        fprintf(stderr, "%shint:%s choose y to repair, n to abort, or d for details\n", check_err_clr(PAK_CLR_YELLOW), check_err_clr(PAK_CLR_RESET));
     }
-    return answer[0] == '\n' || answer[0] == '\0' || (answer[0] != 'n' && answer[0] != 'N');
 }
 
 static int write_repaired_archive(const char *archive_path, const char *out_path, const struct check_report *report, const struct pak_options *opts)

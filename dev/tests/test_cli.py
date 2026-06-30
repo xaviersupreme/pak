@@ -113,7 +113,7 @@ def run_pak_tty(pak, cwd, *args, input_text="y\n", timeout=10):
 
             if chunk:
                 output.extend(chunk)
-                if input_text is not None and not sent_input and b"[Y/n]" in output:
+                if input_text is not None and not sent_input and (b"[Y/n]" in output or b"[Y/n/d]" in output):
                     os.write(master, input_text.encode("utf-8"))
                     sent_input = True
             elif proc.poll() is not None:
@@ -437,10 +437,13 @@ def test_check_repair_writes_clean_archive(pak, root):
         fp.write(b"junk after archive")
 
     repaired = cwd / "repair.repaired.pak"
-    result = run_pak_tty(pak, cwd, "check", archive, input_text="y\n")
+    result = run_pak_tty(pak, cwd, "check", archive, input_text="d\ny\n")
     check(result is not None, "tty repair test needs pty support")
     check(result.returncode == 0, "repair check failed\nstdout:\n{0}".format(result.stdout))
     check(repaired.exists(), "repair did not write repaired archive")
+    check("repair details" in result.stdout, "repair details were not shown\n" + result.stdout)
+    check("keep" in result.stdout and "alpha.txt" in result.stdout, "repair details did not show kept files\n" + result.stdout)
+    check("strip" in result.stdout and "archive end" in result.stdout, "repair details did not show stripped junk\n" + result.stdout)
     check("repaired: wrote" in result.stdout, "repair did not report repaired output\n" + result.stdout)
 
     checked = run_pak(pak, cwd, "check", repaired)
