@@ -26,6 +26,18 @@ Windows fallback w/o make:
 .\make.ps1
 ```
 
+Run the CLI regression tests:
+
+```sh
+make test
+```
+
+Windows fallback:
+
+```powershell
+.\make.ps1 test
+```
+
 <!-- ## releases
 
 Builds are on the GitHub Releases page. -->

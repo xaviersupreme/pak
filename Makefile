@@ -12,13 +12,32 @@ ifeq ($(strip $(CC)),)
 $(error no C compiler found. install clang, gcc, or cc, or run make CC=/path/to/compiler)
 endif
 
+ifeq ($(OS),Windows_NT)
+HOST = windows
+PYTHON_CANDIDATES = python python3
+TEST_PAK = .\$(BIN)
+else
+HOST = unix
+PYTHON_CANDIDATES = python3 python
+TEST_PAK = ./$(BIN)
+endif
+
+ifeq ($(origin PYTHON),undefined)
+ifeq ($(OS),Windows_NT)
+PYTHON := $(if $(shell where py 2>NUL),py -3,$(firstword $(foreach p,$(PYTHON_CANDIDATES),$(if $(shell where $(p) 2>NUL),$(p)))))
+else
+PYTHON := $(firstword $(foreach p,$(PYTHON_CANDIDATES),$(if $(shell command -v $(p) 2>/dev/null),$(p))))
+endif
+endif
+
 CFLAGS ?= -std=c11 -Wall -Wextra -pedantic -O2
 LDFLAGS ?=
 CPPFLAGS ?= -Iinclude -Ivendor/miniz -DMINIZ_NO_ZLIB_COMPATIBLE_NAMES
 
 SRC = src/cli/main.c src/cli/hints.c src/archive/core.c src/archive/check.c src/codec/compress.c src/codec/crc.c src/fs/io.c src/fs/paths.c src/fs/pattern.c src/output/log.c src/output/diag.c src/format/endian.c vendor/miniz/miniz.c vendor/miniz/miniz_tdef.c vendor/miniz/miniz_tinfl.c
 LIB_SRC = $(filter-out src/cli/main.c,$(SRC))
-OBJ = $(SRC:.c=.o)
+BUILD_DIR = build/$(HOST)
+OBJ = $(SRC:%.c=$(BUILD_DIR)/%.o)
 BIN = pak
 FUZZ_CC ?= clang
 FUZZ_DIR = fuzz
@@ -53,6 +72,10 @@ all: $(BIN)
 
 $(BIN): $(OBJ)
 	$(CC) $(LDFLAGS) $(OBJ) -o $@
+
+test: $(BIN)
+	$(if $(strip $(PYTHON)),,$(error no Python 3 found. install Python 3 or run make PYTHON=/path/to/python test))
+	$(PYTHON) tests/test_cli.py --pak $(TEST_PAK)
 
 fuzz: fuzz-smoke
 
@@ -94,18 +117,26 @@ else
 	./$(FUZZ_BIN) $(FUZZ_CORPUS_DIR) -max_total_time=15
 endif
 
-%.o: %.c include/pak.h src/archive/internal.h
+$(BUILD_DIR)/%.o: %.c include/pak.h src/archive/internal.h
+ifeq ($(OS),Windows_NT)
+	-if not exist "$(subst /,\,$(@D))" mkdir "$(subst /,\,$(@D))"
+else
+	mkdir -p $(@D)
+endif
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
 ifeq ($(OS),Windows_NT)
 clean:
-	-cmd /C "for %%F in ($(subst /,\,$(OBJ)) $(BIN) pak $(subst /,\,$(FUZZ_BIN)) $(subst /,\,$(FUZZ_SMOKE_BIN)) src\*.o) do if exist %%F del /Q %%F"
+	-cmd /C "if exist build rmdir /S /Q build & if exist pak.exe del /Q pak.exe & if exist pak del /Q pak"
+	-cmd /C "for /R src %%F in (*.o) do del /Q %%F"
+	-cmd /C "for /R vendor %%F in (*.o) do del /Q %%F"
 	-cmd /C "if exist fuzz\bin rmdir /S /Q fuzz\bin & if exist fuzz\corpus rmdir /S /Q fuzz\corpus"
 else
 clean:
-	rm -f $(OBJ) $(BIN) $(FUZZ_BIN) $(FUZZ_SMOKE_BIN)
-	rm -f src/*.o
+	rm -f $(BIN) $(FUZZ_BIN) $(FUZZ_SMOKE_BIN)
+	rm -rf build
+	find src vendor -name '*.o' -delete
 	rm -rf $(FUZZ_BIN_DIR) fuzz/corpus
 endif
 
-.PHONY: all clean fuzz fuzz-libfuzzer fuzz-run fuzz-run-libfuzzer fuzz-seed fuzz-smoke
+.PHONY: all clean test fuzz fuzz-libfuzzer fuzz-run fuzz-run-libfuzzer fuzz-seed fuzz-smoke

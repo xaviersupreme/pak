@@ -5,6 +5,7 @@
 *.pdb
 *.pak
 /pak
+build/
 out/
 fuzz/bin/
 fuzz/corpus/
