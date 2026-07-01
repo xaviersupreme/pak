@@ -96,9 +96,10 @@ jobs:
         run: |
           $makensis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
           $pakExe = (Resolve-Path pak.exe).Path
+          $outFile = Join-Path (Get-Location) "pak-${{ matrix.target }}-setup.exe"
           & $makensis `
             /DPAK_EXE=$pakExe `
-            /DOUT_FILE=pak-${{ matrix.target }}-setup.exe `
+            /DOUT_FILE=$outFile `
             /DPRODUCT_VERSION=${{ github.event_name == 'release' && github.event.release.tag_name || inputs.release_tag || github.ref_name }} `
             /DARCH=${{ matrix.target }} `
             packaging/windows/pak.nsi
