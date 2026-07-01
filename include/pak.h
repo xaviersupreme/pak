@@ -37,6 +37,7 @@
 #define PAK_CMD_RENAME 8
 #define PAK_CMD_CHECK 9
 #define PAK_CMD_REPACK 10
+#define PAK_CMD_VERSION 11
 
 #define PAK_OPT_COMPRESS 0x0001u
 #define PAK_OPT_LEVEL 0x0002u
@@ -58,6 +59,10 @@
 #define PAK_CLR_GREEN "\033[32m"
 #define PAK_CLR_YELLOW "\033[33m"
 #define PAK_CLR_CYAN "\033[36m"
+
+#ifndef PAK_VERSION
+#define PAK_VERSION "dev"
+#endif
 
 struct path_list {
     char **items;

@@ -67,18 +67,18 @@ jobs:
       - name: build windows
         if: matrix.msystem
         shell: msys2 {0}
-        run: make CC=gcc
+        run: make CC=gcc VERSION="${{ github.event_name == 'release' && github.event.release.tag_name || inputs.release_tag || github.ref_name }}"
 
       - name: build macos
         if: startsWith(matrix.target, 'macos-')
-        run: make CFLAGS="-std=c11 -Wall -Wextra -pedantic -O2 -arch ${{ matrix.macos_arch }}" LDFLAGS="-arch ${{ matrix.macos_arch }}"
+        run: make VERSION="${{ github.event_name == 'release' && github.event.release.tag_name || inputs.release_tag || github.ref_name }}" CFLAGS="-std=c11 -Wall -Wextra -pedantic -O2 -arch ${{ matrix.macos_arch }}" LDFLAGS="-arch ${{ matrix.macos_arch }}"
 
       - name: build linux
         if: startsWith(matrix.target, 'linux-')
         run: |
           sudo apt-get update
           sudo apt-get install --yes musl-tools
-          make CC=musl-gcc LDFLAGS=-static
+          make CC=musl-gcc VERSION="${{ github.event_name == 'release' && github.event.release.tag_name || inputs.release_tag || github.ref_name }}" LDFLAGS=-static
 
       - name: package windows
         if: matrix.archive == 'zip'

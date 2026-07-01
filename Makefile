@@ -35,7 +35,8 @@ endif
 
 CFLAGS ?= -std=c11 -Wall -Wextra -pedantic -O2
 LDFLAGS ?=
-CPPFLAGS ?= -Iinclude -Ivendor/miniz -DMINIZ_NO_ZLIB_COMPATIBLE_NAMES
+VERSION ?= dev
+CPPFLAGS ?= -Iinclude -Ivendor/miniz -DMINIZ_NO_ZLIB_COMPATIBLE_NAMES -DPAK_VERSION=\"$(VERSION)\"
 PREFIX ?= /usr/local
 BINDIR ?= $(PREFIX)/bin
 INSTALL_PROGRAM ?= install -m 0755

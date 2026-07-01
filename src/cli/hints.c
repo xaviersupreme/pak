@@ -30,7 +30,8 @@ static const struct pak_command_spec command_specs[] = {
     { "delete", "delete", PAK_CMD_DELETE, 2, PAK_ARG_MANY, 0, "pak delete <archive.pak> <files...>" },
     { "rename", "rename", PAK_CMD_RENAME, 3, 3, 0, "pak rename <archive.pak> <old> <new>" },
     { "repack", "repack", PAK_CMD_REPACK, 1, PAK_ARG_MANY, REPACK_OPTIONS, "pak repack [options] <archive.pak> [files...]" },
-    { "check", "check", PAK_CMD_CHECK, 1, 1, 0, "pak check <archive.pak>" }
+    { "check", "check", PAK_CMD_CHECK, 1, 1, 0, "pak check <archive.pak>" },
+    { "version", "version", PAK_CMD_VERSION, 0, 0, 0, "pak version" }
 };
 
 static const struct option_spec option_specs[] = {
@@ -48,7 +49,11 @@ static const struct option_spec option_specs[] = {
     { "--overwrite", PAK_OPT_OVERWRITE },
     { "--skip-existing", PAK_OPT_SKIP_EXISTING },
     { "--help", 0 },
-    { "-h", 0 }
+    { "-h", 0 },
+    { "--version", 0 },
+    { "--v", 0 },
+    { "-v", 0 },
+    { "-V", 0 }
 };
 
 static int safe_arg_char(char ch)
@@ -908,7 +913,7 @@ void hint_unknown_command(int argc, char **argv, int count, char **args, const s
     (void)argc;
     (void)argv;
     diag_error("unknown command '%s'", args[0]);
-    diag_known("make, update, list, extract, unpack, cat, info, delete, rename, repack, check");
+    diag_known("make, update, list, extract, unpack, cat, info, delete, rename, repack, check, version");
     if (same_text(args[0], "verify") || same_text(args[0], "test")) {
         diag_hint("use check for archive validation");
         print_try_start();

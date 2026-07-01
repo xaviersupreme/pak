@@ -46,6 +46,7 @@ static void usage(FILE *out)
     usage_command(out, "rename", "<archive.pak> <old> <new>");
     usage_command(out, "repack", "[options] <archive.pak> [files...|patterns...]");
     usage_command(out, "check", "<archive.pak>");
+    usage_command(out, "version", "");
 
     fprintf(out, "\nflags are command scoped; they can appear before or after the command.\n");
 
@@ -81,6 +82,11 @@ static void usage(FILE *out)
 static int is_help_flag(const char *arg)
 {
     return strcmp(arg, "-h") == 0 || strcmp(arg, "--help") == 0;
+}
+
+static int is_version_flag(const char *arg)
+{
+    return strcmp(arg, "--version") == 0 || strcmp(arg, "--v") == 0 || strcmp(arg, "-v") == 0 || strcmp(arg, "-V") == 0;
 }
 
 static int push_arg(char **args, int *count, char *arg)
@@ -361,6 +367,10 @@ int main(int argc, char **argv)
             usage(stdout);
             return 0;
         }
+        if (is_version_flag(argv[i])) {
+            printf("pak %s\n", PAK_VERSION);
+            return 0;
+        }
     }
 
     args = calloc((size_t)argc, sizeof(*args));
@@ -416,6 +426,10 @@ int main(int argc, char **argv)
             break;
         case PAK_CMD_CHECK:
             rc = pak_check(args[1], &opts);
+            break;
+        case PAK_CMD_VERSION:
+            printf("pak %s\n", PAK_VERSION);
+            rc = 0;
             break;
         default:
             diag_error("internal command error");

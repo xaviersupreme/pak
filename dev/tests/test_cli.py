@@ -264,6 +264,10 @@ def test_core_command_flow(pak, root):
     write_text(cwd / "alpha.txt", "alpha\n")
     write_text(cwd / "beta.txt", "beta v1\n")
 
+    for version_arg in ("--version", "--v", "-v", "-V", "version"):
+        version = run_pak(pak, cwd, version_arg)
+        check(version.stdout.startswith("pak "), "{0} did not print a pak version".format(version_arg))
+
     run_pak(pak, cwd, "make", "bundle", "alpha.txt", "beta.txt")
     archive = cwd / "bundle.pak"
     check(archive.exists(), "make should append .pak")
