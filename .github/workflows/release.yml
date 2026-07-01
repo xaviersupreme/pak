@@ -105,6 +105,11 @@ jobs:
           path: release
           merge-multiple: true
 
+      - name: write checksums
+        run: |
+          cd release
+          sha256sum pak-* > SHA256SUMS
+
       - name: upload release assets
         env:
           GH_TOKEN: ${{ github.token }}

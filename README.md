@@ -20,6 +20,12 @@ Use it for asset packs, tools, configs, test fixtures, and simple project data.
 make
 ```
 
+Install from source:
+
+```sh
+make install PREFIX=/usr/local
+```
+
 Windows fallback w/o make:
 
 ```powershell
@@ -28,9 +34,9 @@ Windows fallback w/o make:
 
 Development notes are in [docs/development.md](docs/development.md).
 
-<!-- ## releases
+## releases
 
-Builds are on the GitHub Releases page. -->
+Builds are on the GitHub Releases page. `SHA256SUMS` is attached for checking downloads.
 
 ## quick start
 

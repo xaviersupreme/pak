@@ -36,6 +36,9 @@ endif
 CFLAGS ?= -std=c11 -Wall -Wextra -pedantic -O2
 LDFLAGS ?=
 CPPFLAGS ?= -Iinclude -Ivendor/miniz -DMINIZ_NO_ZLIB_COMPATIBLE_NAMES
+PREFIX ?= /usr/local
+BINDIR ?= $(PREFIX)/bin
+INSTALL_PROGRAM ?= install -m 0755
 
 SRC = src/cli/main.c src/cli/hints.c src/archive/core.c src/archive/check.c src/codec/compress.c src/codec/crc.c src/fs/io.c src/fs/paths.c src/fs/pattern.c src/output/log.c src/output/diag.c src/format/endian.c vendor/miniz/miniz.c vendor/miniz/miniz_tdef.c vendor/miniz/miniz_tinfl.c
 LIB_SRC = $(filter-out src/cli/main.c,$(SRC))
@@ -82,6 +85,22 @@ $(BIN): $(OBJ)
 test: $(BIN)
 	$(if $(strip $(PYTHON)),,$(error no Python 3 found. install Python 3 or run make PYTHON=/path/to/python test))
 	$(PYTHON) $(TEST_SCRIPT) --pak $(TEST_PAK)
+
+install: $(BIN)
+ifeq ($(WINDOWS_CMD_SHELL),1)
+	-cmd /C if not exist "$(subst /,\,$(DESTDIR)$(BINDIR))" mkdir "$(subst /,\,$(DESTDIR)$(BINDIR))"
+	copy /Y "$(BIN)" "$(subst /,\,$(DESTDIR)$(BINDIR))\pak.exe"
+else
+	mkdir -p "$(DESTDIR)$(BINDIR)"
+	$(INSTALL_PROGRAM) "$(BIN)" "$(DESTDIR)$(BINDIR)/pak"
+endif
+
+uninstall:
+ifeq ($(WINDOWS_CMD_SHELL),1)
+	-cmd /C if exist "$(subst /,\,$(DESTDIR)$(BINDIR))\pak.exe" del /Q "$(subst /,\,$(DESTDIR)$(BINDIR))\pak.exe"
+else
+	rm -f "$(DESTDIR)$(BINDIR)/pak"
+endif
 
 fuzz: fuzz-smoke
 
@@ -145,4 +164,4 @@ clean:
 	rm -rf $(FUZZ_BIN_DIR) $(FUZZ_DIR)/corpus
 endif
 
-.PHONY: all clean test fuzz fuzz-libfuzzer fuzz-run fuzz-run-libfuzzer fuzz-seed fuzz-smoke
+.PHONY: all clean install uninstall test fuzz fuzz-libfuzzer fuzz-run fuzz-run-libfuzzer fuzz-seed fuzz-smoke
