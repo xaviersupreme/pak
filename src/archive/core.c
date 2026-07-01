@@ -506,6 +506,8 @@ struct make_input {
     char *name;
 };
 
+static int validate_extract_paths(struct old_entry_ref *entries, uint32_t count, int selected_count, char **selected_names);
+
 static const char *closest_entry_name(struct old_entry_ref *entries, uint32_t count, const char *query)
 {
     const char *query_base = entry_base_name(query);
@@ -625,11 +627,47 @@ static int same_input_path(const char *left, const char *right)
     return same;
 }
 
+static int compare_old_entries_by_name(const void *left, const void *right)
+{
+    const struct old_entry_ref *a = left;
+    const struct old_entry_ref *b = right;
+
+    return strcmp(a->entry.name, b->entry.name);
+}
+
+static char archive_name_sort_char(char ch)
+{
+#ifdef _WIN32
+    if (ch >= 'A' && ch <= 'Z') {
+        return (char)(ch - 'A' + 'a');
+    }
+#endif
+    return ch;
+}
+
+static int compare_archive_names_for_extract(const char *left, const char *right)
+{
+    while (*left != '\0' && *right != '\0') {
+        char a = archive_name_sort_char(*left);
+        char b = archive_name_sort_char(*right);
+
+        if (a != b) {
+            return (unsigned char)a < (unsigned char)b ? -1 : 1;
+        }
+        left++;
+        right++;
+    }
+    if (*left == *right) {
+        return 0;
+    }
+    return *left == '\0' ? -1 : 1;
+}
+
 static int compare_inputs_by_name(const void *left, const void *right)
 {
     const struct make_input *a = left;
     const struct make_input *b = right;
-    int by_name = strcmp(a->name, b->name);
+    int by_name = compare_archive_names_for_extract(a->name, b->name);
 
     if (by_name != 0) {
         return by_name;
@@ -637,12 +675,41 @@ static int compare_inputs_by_name(const void *left, const void *right)
     return strcmp(a->path, b->path);
 }
 
-static int compare_old_entries_by_name(const void *left, const void *right)
+static int compare_extract_name_ptrs(const void *left, const void *right)
 {
-    const struct old_entry_ref *a = left;
-    const struct old_entry_ref *b = right;
+    const char *const *a = left;
+    const char *const *b = right;
 
-    return strcmp(a->entry.name, b->entry.name);
+    return compare_archive_names_for_extract(*a, *b);
+}
+
+static int archive_name_is_parent_path(const char *parent, const char *child)
+{
+    size_t i;
+
+    for (i = 0; parent[i] != '\0'; i++) {
+        if (child[i] == '\0' || archive_name_sort_char(parent[i]) != archive_name_sort_char(child[i])) {
+            return 0;
+        }
+    }
+    return child[i] == '/';
+}
+
+static int archive_names_conflict_as_paths(const char *left, const char *right)
+{
+    return archive_name_is_parent_path(left, right) || archive_name_is_parent_path(right, left);
+}
+
+static int report_archive_path_conflict(const char *left, const char *right)
+{
+    if (archive_name_is_parent_path(right, left)) {
+        const char *tmp = left;
+
+        left = right;
+        right = tmp;
+    }
+    diag_error("archive path conflict between '%s' and '%s': one path is inside the other", left, right);
+    return -1;
 }
 
 static void free_make_inputs(struct make_input *inputs, int count)
@@ -722,10 +789,16 @@ static int build_make_inputs(const char *archive_path, int file_count, char **fi
     }
 
     if (count > 1) {
+        log_step(opts, "validate %d archive names", count);
         qsort(inputs, (size_t)count, sizeof(*inputs), compare_inputs_by_name);
         for (i = 1; i < count; i++) {
             if (same_archive_name(inputs[i - 1].name, inputs[i].name)) {
                 diag_error("duplicate archive name '%s'", inputs[i].name);
+                free_make_inputs(inputs, count);
+                return -1;
+            }
+            if (archive_names_conflict_as_paths(inputs[i - 1].name, inputs[i].name)) {
+                report_archive_path_conflict(inputs[i - 1].name, inputs[i].name);
                 free_make_inputs(inputs, count);
                 return -1;
             }
@@ -1364,6 +1437,7 @@ int pak_update(const char *archive_path, int file_count, char **file_paths, char
     uint32_t kept_count;
     uint32_t final_count;
     uint32_t old_index;
+    uint32_t i;
     int input_count;
     int input_index;
     int version;
@@ -1407,6 +1481,24 @@ int pak_update(const char *archive_path, int file_count, char **file_paths, char
         return -1;
     }
     final_count = (uint32_t)final_count64;
+
+    if (validate_extract_paths(old_entries, kept_count, 0, NULL) != 0) {
+        fclose(archive);
+        free_old_entry_refs(old_entries, kept_count);
+        free_make_inputs(inputs, input_count);
+        return -1;
+    }
+    for (i = 0; i < kept_count; i++) {
+        for (input_index = 0; input_index < input_count; input_index++) {
+            if (archive_names_conflict_as_paths(old_entries[i].entry.name, inputs[input_index].name)) {
+                report_archive_path_conflict(old_entries[i].entry.name, inputs[input_index].name);
+                fclose(archive);
+                free_old_entry_refs(old_entries, kept_count);
+                free_make_inputs(inputs, input_count);
+                return -1;
+            }
+        }
+    }
 
     tmp_path = make_temp_archive_path(archive_path);
     if (tmp_path == NULL) {
@@ -1675,6 +1767,48 @@ static void mark_selected(const char *entry_name, int selected_count, char **sel
             seen[i] = 1;
         }
     }
+}
+
+static int validate_extract_paths(struct old_entry_ref *entries, uint32_t count, int selected_count, char **selected_names)
+{
+    const char **names;
+    uint32_t name_count;
+    uint32_t i;
+
+    if (count <= 1) {
+        return 0;
+    }
+    names = calloc(count, sizeof(*names));
+    if (names == NULL) {
+        diag_error("out of memory");
+        return -1;
+    }
+
+    name_count = 0;
+    for (i = 0; i < count; i++) {
+        if (entry_is_selected(entries[i].entry.name, selected_count, selected_names)) {
+            if (!io_is_extractable_path(entries[i].entry.name)) {
+                diag_error("cannot use archive path '%s': path is not valid on this platform", entries[i].entry.name);
+                free(names);
+                return -1;
+            }
+            names[name_count++] = entries[i].entry.name;
+        }
+    }
+
+    if (name_count > 1) {
+        qsort(names, name_count, sizeof(*names), compare_extract_name_ptrs);
+        for (i = 1; i < name_count; i++) {
+            if (archive_names_conflict_as_paths(names[i - 1], names[i])) {
+                report_archive_path_conflict(names[i - 1], names[i]);
+                free(names);
+                return -1;
+            }
+        }
+    }
+
+    free(names);
+    return 0;
 }
 
 static int report_missing_selected(int selected_count, char **selected_names, int *seen)
@@ -2159,6 +2293,12 @@ int pak_repack(const char *archive_path, int selected_count, char **selected_nam
         free(seen);
         return -1;
     }
+    if (validate_extract_paths(entries, count, 0, NULL) != 0) {
+        free_old_entry_refs(entries, count);
+        fclose(archive);
+        free(seen);
+        return -1;
+    }
 
     repack = calloc(count == 0 ? 1 : count, sizeof(*repack));
     if (repack == NULL) {
@@ -2520,7 +2660,7 @@ int pak_rename(const char *archive_path, const char *old_name, const char *new_n
     int version;
     int rc;
 
-    if (!io_is_safe_path(new_name)) {
+    if (!io_is_safe_path(new_name) || !io_is_extractable_path(new_name)) {
         diag_error("bad archive path '%s'", new_name);
         return -1;
     }
@@ -2565,6 +2705,12 @@ int pak_rename(const char *archive_path, const char *old_name, const char *new_n
     for (i = 0; i < count; i++) {
         if (i != match_index && same_archive_name(entries[i].entry.name, new_name)) {
             diag_error("entry '%s' already exists", new_name);
+            goto done;
+        }
+        if (i != match_index &&
+            (archive_name_is_parent_path(new_name, entries[i].entry.name) ||
+                archive_name_is_parent_path(entries[i].entry.name, new_name))) {
+            diag_error("rename target '%s' would conflict with existing entry '%s': one path is inside the other", new_name, entries[i].entry.name);
             goto done;
         }
     }
@@ -2618,6 +2764,12 @@ int pak_extract(const char *archive_path, int selected_count, char **selected_na
 
     preflight_entries = NULL;
     if (read_archive_entries(archive, archive_path, &preflight_entries, &count, &version) != 0) {
+        fclose(archive);
+        free(seen);
+        return -1;
+    }
+    if (validate_extract_paths(preflight_entries, count, selected_count, selected_names) != 0) {
+        free_old_entry_refs(preflight_entries, count);
         fclose(archive);
         free(seen);
         return -1;

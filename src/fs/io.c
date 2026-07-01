@@ -14,6 +14,49 @@
 #define mkdir_one(path) mkdir(path, 0777)
 #endif
 
+static int path_is_existing_dir(const char *path)
+{
+#ifdef _WIN32
+    struct _stat64 st;
+
+    return _stat64(path, &st) == 0 && (st.st_mode & _S_IFDIR) != 0;
+#else
+    struct stat st;
+
+    return stat(path, &st) == 0 && S_ISDIR(st.st_mode);
+#endif
+}
+
+static int io_path_separator(char ch)
+{
+    return ch == '/' || ch == '\\';
+}
+
+static char *first_parent_dir_separator(char *path)
+{
+#ifdef _WIN32
+    char *p;
+
+    if (((path[0] >= 'A' && path[0] <= 'Z') || (path[0] >= 'a' && path[0] <= 'z')) && path[1] == ':') {
+        return io_path_separator(path[2]) ? path + 3 : path + 2;
+    }
+    if (io_path_separator(path[0]) && io_path_separator(path[1])) {
+        p = path + 2;
+        while (*p != '\0' && !io_path_separator(*p)) {
+            p++;
+        }
+        while (io_path_separator(*p)) {
+            p++;
+        }
+        while (*p != '\0' && !io_path_separator(*p)) {
+            p++;
+        }
+        return p;
+    }
+#endif
+    return path;
+}
+
 int io_file_size(const char *path, uint64_t *size)
 {
 #ifdef _WIN32
@@ -75,6 +118,75 @@ static int io_is_printable_name_char(char ch)
 
     return value >= 32 && value != 127;
 }
+
+#ifdef _WIN32
+static char upper_ascii(char ch)
+{
+    if (ch >= 'a' && ch <= 'z') {
+        return (char)(ch - 'a' + 'A');
+    }
+    return ch;
+}
+
+static int component_prefix_equals(const char *part, size_t len, const char *reserved)
+{
+    size_t i;
+
+    for (i = 0; reserved[i] != '\0'; i++) {
+        if (i >= len || upper_ascii(part[i]) != reserved[i]) {
+            return 0;
+        }
+    }
+    return i == len;
+}
+
+static int windows_component_is_reserved(const char *part, size_t len)
+{
+    size_t base_len = 0;
+
+    while (base_len < len && part[base_len] != '.') {
+        base_len++;
+    }
+    while (base_len > 0 && (part[base_len - 1] == ' ' || part[base_len - 1] == '.')) {
+        base_len--;
+    }
+
+    if (component_prefix_equals(part, base_len, "CON") ||
+        component_prefix_equals(part, base_len, "PRN") ||
+        component_prefix_equals(part, base_len, "AUX") ||
+        component_prefix_equals(part, base_len, "NUL")) {
+        return 1;
+    }
+    if (base_len == 4 &&
+        (upper_ascii(part[0]) == 'C' || upper_ascii(part[0]) == 'L') &&
+        upper_ascii(part[1]) == (upper_ascii(part[0]) == 'C' ? 'O' : 'P') &&
+        upper_ascii(part[2]) == (upper_ascii(part[0]) == 'C' ? 'M' : 'T') &&
+        part[3] >= '1' && part[3] <= '9') {
+        return 1;
+    }
+    return 0;
+}
+
+static int windows_component_char_is_invalid(char ch)
+{
+    return ch == '<' || ch == '>' || ch == ':' || ch == '"' || ch == '|' || ch == '?' || ch == '*';
+}
+
+static int windows_component_is_extractable(const char *part, size_t len)
+{
+    size_t i;
+
+    if (len == 0 || part[len - 1] == ' ' || part[len - 1] == '.') {
+        return 0;
+    }
+    for (i = 0; i < len; i++) {
+        if (windows_component_char_is_invalid(part[i])) {
+            return 0;
+        }
+    }
+    return !windows_component_is_reserved(part, len);
+}
+#endif
 
 int io_is_plain_name(const char *name)
 {
@@ -138,6 +250,33 @@ int io_is_safe_path(const char *name)
     return 1;
 }
 
+int io_is_extractable_path(const char *name)
+{
+#ifdef _WIN32
+    const char *p;
+    const char *part;
+
+    if (!io_is_safe_path(name)) {
+        return 0;
+    }
+    part = name;
+    for (p = name; ; p++) {
+        if (*p == '/' || *p == '\0') {
+            if (!windows_component_is_extractable(part, (size_t)(p - part))) {
+                return 0;
+            }
+            if (*p == '\0') {
+                break;
+            }
+            part = p + 1;
+        }
+    }
+    return 1;
+#else
+    return io_is_safe_path(name);
+#endif
+}
+
 static void strip_leading_current_dir(char *path)
 {
     while (path[0] == '.' && path[1] == '/') {
@@ -178,7 +317,7 @@ char *io_archive_name(const char *path, int preserve_paths)
         strip_leading_root(out);
     }
 
-    if ((preserve_paths && !io_is_safe_path(out)) || (!preserve_paths && !io_is_plain_name(out))) {
+    if ((preserve_paths && !io_is_safe_path(out)) || (!preserve_paths && !io_is_plain_name(out)) || !io_is_extractable_path(out)) {
         free(out);
         errno = EINVAL;
         return NULL;
@@ -229,13 +368,18 @@ int io_make_parent_dirs(const char *path)
     }
     strcpy(tmp, path);
 
-    for (p = tmp; *p != '\0'; p++) {
-        if (*p == '/' || *p == '\\') {
+    for (p = first_parent_dir_separator(tmp); *p != '\0'; p++) {
+        if (io_path_separator(*p)) {
             char old = *p;
             *p = '\0';
-            if (tmp[0] != '\0' && mkdir_one(tmp) != 0 && errno != EEXIST) {
-                free(tmp);
-                return -1;
+            if (tmp[0] != '\0' && mkdir_one(tmp) != 0) {
+                if (errno != EEXIST || !path_is_existing_dir(tmp)) {
+                    if (errno == EEXIST) {
+                        errno = ENOTDIR;
+                    }
+                    free(tmp);
+                    return -1;
+                }
             }
             *p = old;
         }

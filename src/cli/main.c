@@ -339,7 +339,7 @@ static int run_write_command(const char *command, int count, char **args, struct
 
     rc = 1;
     path_list_init(&files);
-    if (path_list_add_inputs(&files, count - 2, &args[2], &saw_directory) == 0) {
+    if (path_list_add_inputs(&files, count - 2, &args[2], &saw_directory, opts) == 0) {
         write_opts = *opts;
         if (strcmp(command, "make") == 0) {
             rc = pak_make(archive_path, files.count, files.items, files.names, &write_opts) == 0 ? 0 : 1;

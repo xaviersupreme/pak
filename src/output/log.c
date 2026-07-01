@@ -118,6 +118,7 @@ static void vlog_line(const struct pak_options *opts, const char *prefix, const 
     fputs(clr(PAK_CLR_RESET), stdout);
     vfprintf(stdout, fmt, ap);
     fputc('\n', stdout);
+    fflush(stdout);
 }
 
 void log_step(const struct pak_options *opts, const char *fmt, ...)

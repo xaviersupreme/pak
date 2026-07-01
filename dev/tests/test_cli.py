@@ -68,6 +68,34 @@ def run_pak(pak, cwd, *args, check_rc=True):
     return result
 
 
+def run_pak_timeout(pak, cwd, *args, timeout=2, check_rc=True):
+    env = os.environ.copy()
+    env["NO_COLOR"] = "1"
+    env.pop("FORCE_COLOR", None)
+    try:
+        result = subprocess.run(
+            [str(pak), *[str(arg) for arg in args]],
+            cwd=str(cwd),
+            env=env,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        fail("pak {args} did not exit within {timeout}s".format(args=" ".join(str(arg) for arg in args), timeout=timeout))
+    if check_rc and result.returncode != 0:
+        fail(
+            "pak {args} exited {code}\nstdout:\n{stdout}\nstderr:\n{stderr}".format(
+                args=" ".join(str(arg) for arg in args),
+                code=result.returncode,
+                stdout=result.stdout,
+                stderr=result.stderr,
+            )
+        )
+    return result
+
+
 def run_pak_bytes(pak, cwd, *args, check_rc=True):
     env = os.environ.copy()
     env["NO_COLOR"] = "1"
@@ -300,6 +328,7 @@ def test_directory_wildcards_and_mixed_inputs(pak, root):
     write_text(cwd / "loose.txt", "loose\n")
     write_text(cwd / "assets" / "config.json", "{\"ok\":true}\n")
     write_text(cwd / "assets" / "levels" / "one.map", "level one\n")
+    write_text(cwd / "assets" / "bonus" / "one.map", "bonus one\n")
     write_text(cwd / "assets" / "readme.tmp", "temporary\n")
     write_text(cwd / "docs" / "guide.txt", "guide\n")
 
@@ -309,8 +338,12 @@ def test_directory_wildcards_and_mixed_inputs(pak, root):
         pak,
         cwd,
         archive,
-        ["config.json", "levels/one.map", "readme.tmp", "loose.txt", "docs/guide.txt"],
+        ["bonus/one.map", "config.json", "levels/one.map", "readme.tmp", "loose.txt", "docs/guide.txt"],
     )
+
+    mid_archive = cwd / "mid-wildcard.pak"
+    run_pak(pak, cwd, "make", "--paths", mid_archive, "assets/*/one.map")
+    assert_names(pak, cwd, mid_archive, ["assets/bonus/one.map", "assets/levels/one.map"])
 
     txt_names = set(list_names(pak, cwd, archive, "*.txt"))
     check(txt_names == {"loose.txt", "docs/guide.txt"}, "wildcard list selected {0}".format(sorted(txt_names)))
@@ -322,7 +355,7 @@ def test_directory_wildcards_and_mixed_inputs(pak, root):
 
     run_pak(pak, cwd, "delete", archive, "*.tmp")
     run_pak(pak, cwd, "rename", archive, "docs/guide.txt", "docs/readme.txt")
-    assert_names(pak, cwd, archive, ["config.json", "levels/one.map", "loose.txt", "docs/readme.txt"])
+    assert_names(pak, cwd, archive, ["bonus/one.map", "config.json", "levels/one.map", "loose.txt", "docs/readme.txt"])
 
     if os.name == "nt":
         write_text(cwd / "win path" / "sub dir" / "note.txt", "windows path\n")
@@ -381,6 +414,72 @@ def test_windows_reparse_directory_is_skipped(pak, root):
     check("loose.txt" in names, "normal file was not packed")
     check("real/inside.txt" in names, "real directory was not packed")
     check("link/inside.txt" not in names, "reparse directory was followed")
+
+
+def test_windows_unreadable_child_directory_is_skipped(pak, root):
+    if os.name != "nt":
+        return
+
+    import ctypes
+
+    cwd = root / "windows-unreadable-child"
+    cwd.mkdir()
+    write_text(cwd / "readable" / "keep.txt", "keep\n")
+    blocked = cwd / "blocked"
+    blocked.mkdir()
+    write_text(blocked / "hidden.txt", "hidden\n")
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateFileW.argtypes = [
+        ctypes.c_wchar_p,
+        ctypes.c_uint32,
+        ctypes.c_uint32,
+        ctypes.c_void_p,
+        ctypes.c_uint32,
+        ctypes.c_uint32,
+        ctypes.c_void_p,
+    ]
+    kernel32.CreateFileW.restype = ctypes.c_void_p
+    kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+
+    handle = kernel32.CreateFileW(str(blocked), 0x80000000, 0, None, 3, 0x02000000, None)
+    if handle == ctypes.c_void_p(-1).value:
+        return
+
+    try:
+        archive = cwd / "dot.pak"
+        result = run_pak(pak, cwd, "make", "--paths", archive, ".")
+        combined = result.stdout + result.stderr
+        check("scan ." in combined, "directory scan did not report that it started\n" + combined)
+        check("skip directory" in combined and "blocked" in combined, "unreadable child skip was not reported\n" + combined)
+        names = set(list_names(pak, cwd, archive))
+        check("readable/keep.txt" in names, "readable child was not packed")
+        check("blocked/hidden.txt" not in names, "unreadable child was packed")
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def test_wildcard_directory_prefixes_are_preserved(pak, root):
+    cwd = root / "wildcard-dir-prefix"
+    cwd.mkdir()
+    write_text(cwd / ".one" / "argv.json", "one\n")
+    write_text(cwd / ".two" / "argv.json", "two\n")
+
+    archive = cwd / "hidden.pak"
+    run_pak(pak, cwd, "make", archive, ".*")
+    assert_names(pak, cwd, archive, [".one/argv.json", ".two/argv.json"])
+
+
+def test_no_match_wildcard_returns_promptly(pak, root):
+    cwd = root / "wildcard-no-match"
+    cwd.mkdir()
+    for i in range(320):
+        write_text(cwd / "dir{0:03d}".format(i) / "note.txt", "note\n")
+
+    result = run_pak_timeout(pak, cwd, "make", "missing.pak", ".?", "--compress", check_rc=False)
+    combined = result.stdout + result.stderr
+    check(result.returncode != 0, "no-match wildcard should fail")
+    check("no files match '.?'" in combined, "no-match wildcard diagnostic changed\n" + combined)
 
 
 def test_hostile_names_and_binary_stdout(pak, root):
@@ -455,6 +554,162 @@ def test_extract_corrupt_payload_preserves_outputs(pak, root):
     check(result.returncode != 0, "corrupt extract to fresh directory should fail")
     check(not (fresh / "a.txt").exists(), "corrupt extract left a new bad output file")
     check(not list(fresh.glob("*.tmp*")), "corrupt fresh extract left a temp file")
+
+
+def test_extract_path_conflicts_are_rejected_before_writes(pak, root):
+    cwd = root / "extract-path-conflict"
+    cwd.mkdir()
+    archive = cwd / "conflict.pak"
+    write_pak2_archive(archive, [("dir", "plain file\n"), ("dir/file.txt", "nested\n")])
+
+    out = cwd / "out"
+    out.mkdir()
+    result = run_pak(pak, cwd, "unpack", archive, "-C", out, check_rc=False)
+    combined = result.stdout + result.stderr
+    check(result.returncode != 0, "path-conflicting archive should fail")
+    check("archive path conflict between 'dir' and 'dir/file.txt'" in combined, "path conflict diagnostic was unclear\n" + combined)
+    check(not (out / "dir").exists(), "path conflict wrote partial output")
+
+    selected = cwd / "selected"
+    run_pak(pak, cwd, "unpack", archive, "dir/file.txt", "-C", selected)
+    check((selected / "dir" / "file.txt").read_text(encoding="utf-8") == "nested\n", "single selected nested file did not extract")
+
+    parent_blocked = cwd / "parent-blocked"
+    write_text(parent_blocked / "dir", "existing file\n")
+    result = run_pak(pak, cwd, "unpack", archive, "dir/file.txt", "-C", parent_blocked, check_rc=False)
+    combined = result.stdout + result.stderr
+    check(result.returncode != 0, "existing file as parent should fail")
+    check("cannot create parent directory" in combined, "parent conflict diagnostic was unclear\n" + combined)
+    check((parent_blocked / "dir").read_text(encoding="utf-8") == "existing file\n", "parent conflict changed existing file")
+
+    checked = run_pak(pak, cwd, "check", archive, check_rc=False)
+    combined = checked.stdout + checked.stderr
+    check(checked.returncode != 0, "check should report parent/child archive path conflicts")
+    check("entry path conflicts with another entry" in combined, "check path conflict diagnostic was unclear\n" + combined)
+    check("repair plan" in checked.stdout, "check did not offer a path-conflict repair plan\n" + combined)
+
+    repacked = run_pak(pak, cwd, "repack", archive, check_rc=False)
+    combined = repacked.stdout + repacked.stderr
+    check(repacked.returncode != 0, "repack should reject path-conflicting archives")
+    check("archive path conflict between 'dir' and 'dir/file.txt'" in combined, "repack path conflict diagnostic was unclear\n" + combined)
+
+    repaired = cwd / "conflict.repaired.pak"
+    tty = run_pak_tty(pak, cwd, "check", archive, input_text="y\n")
+    if tty is not None:
+        check(tty.returncode == 0, "path-conflict repair failed\nstdout:\n{0}".format(tty.stdout))
+        check(repaired.exists(), "path-conflict repair did not write repaired archive")
+        checked_repair = run_pak(pak, cwd, "check", repaired)
+        check("ok: checked 1 file" in checked_repair.stdout, "path-conflict repair did not produce a clean one-entry archive")
+
+
+def test_rename_rejects_extract_path_conflicts(pak, root):
+    cwd = root / "rename-path-conflict"
+    cwd.mkdir()
+    write_text(cwd / "a.txt", "a\n")
+    write_text(cwd / "b.txt", "b\n")
+
+    archive = cwd / "rename.pak"
+    run_pak(pak, cwd, "make", archive, "a.txt", "b.txt")
+    run_pak(pak, cwd, "rename", archive, "a.txt", "dir")
+
+    result = run_pak(pak, cwd, "rename", archive, "b.txt", "dir/file.txt", check_rc=False)
+    combined = result.stdout + result.stderr
+    check(result.returncode != 0, "rename should reject parent/child path conflicts")
+    check("would conflict with existing entry 'dir'" in combined, "rename path conflict diagnostic was unclear\n" + combined)
+    assert_names(pak, cwd, archive, ["b.txt", "dir"])
+
+
+def test_update_rejects_archive_path_conflicts(pak, root):
+    cwd = root / "update-path-conflict"
+    cwd.mkdir()
+
+    write_text(cwd / "dir", "old\n")
+    first = cwd / "parent-first.pak"
+    run_pak(pak, cwd, "make", first, "dir")
+    (cwd / "dir").unlink()
+    write_text(cwd / "dir" / "file.txt", "new\n")
+
+    result = run_pak(pak, cwd, "update", "--paths", first, "dir/file.txt", check_rc=False)
+    combined = result.stdout + result.stderr
+    check(result.returncode != 0, "update should reject adding child path under existing file entry")
+    check("archive path conflict between 'dir' and 'dir/file.txt'" in combined, "update child conflict diagnostic was unclear\n" + combined)
+    assert_names(pak, cwd, first, ["dir"])
+
+    second = cwd / "child-first.pak"
+    run_pak(pak, cwd, "make", "--paths", second, "dir/file.txt")
+    remove_tree = cwd / "dir"
+    for child in remove_tree.rglob("*"):
+        child.unlink()
+    remove_tree.rmdir()
+    write_text(cwd / "dir", "new parent\n")
+
+    result = run_pak(pak, cwd, "update", second, "dir", check_rc=False)
+    combined = result.stdout + result.stderr
+    check(result.returncode != 0, "update should reject adding parent path over existing child entry")
+    check("archive path conflict between 'dir' and 'dir/file.txt'" in combined, "update parent conflict diagnostic was unclear\n" + combined)
+    assert_names(pak, cwd, second, ["dir/file.txt"])
+
+
+def test_make_rejects_archive_path_conflicts_after_sort(pak, root):
+    cwd = root / "make-path-conflict"
+    cwd.mkdir()
+    write_text(cwd / "dir", "parent\n")
+    write_text(cwd / "nested" / "dir" / "file.txt", "child\n")
+
+    result = run_pak(pak, cwd, "make", "conflict.pak", "dir", "nested", check_rc=False)
+    combined = result.stdout + result.stderr
+    check(result.returncode != 0, "make should reject parent/child archive path conflicts")
+    check("archive path conflict between 'dir' and 'dir/file.txt'" in combined, "make path conflict diagnostic was unclear\n" + combined)
+    check(not (cwd / "conflict.pak").exists(), "make path conflict wrote an archive")
+
+
+def test_many_files_validate_after_scan(pak, root):
+    cwd = root / "many-files"
+    cwd.mkdir()
+    files = cwd / "files"
+    files.mkdir()
+    count = 4096
+
+    for i in range(count):
+        write_bytes(files / "file{0:04d}.txt".format(i), b"")
+
+    result = run_pak_timeout(pak, cwd, "make", "many.pak", "files", timeout=20)
+    combined = result.stdout + result.stderr
+    check("scan found {0} files".format(count) in combined, "many-file scan summary was not printed\n" + combined)
+    check("validate {0} archive names".format(count) in combined, "many-file validation phase was not printed\n" + combined)
+    check("pack {0} files".format(count) in combined, "many-file archive did not reach packing\n" + combined)
+
+
+def test_windows_reserved_archive_paths_are_rejected(pak, root):
+    if os.name != "nt":
+        return
+
+    cwd = root / "windows-reserved-paths"
+    cwd.mkdir()
+    archive = cwd / "reserved.pak"
+    write_pak2_archive(archive, [("NUL", "nul\n"), ("CON.txt", "con\n"), ("ok.txt", "ok\n")])
+
+    out = cwd / "out"
+    out.mkdir()
+    result = run_pak(pak, cwd, "unpack", archive, "-C", out, check_rc=False)
+    combined = result.stdout + result.stderr
+    check(result.returncode != 0, "reserved archive paths should fail on Windows")
+    check("cannot use archive path 'NUL': path is not valid on this platform" in combined, "reserved extract diagnostic was unclear\n" + combined)
+    check(not any(out.iterdir()), "reserved extract wrote partial output")
+
+    checked = run_pak(pak, cwd, "check", archive, check_rc=False)
+    combined = checked.stdout + checked.stderr
+    check(checked.returncode != 0, "check should report Windows-reserved archive paths")
+    check("entry path is not valid on this platform" in combined, "reserved check diagnostic was unclear\n" + combined)
+
+    write_text(cwd / "safe.txt", "safe\n")
+    safe_archive = cwd / "safe.pak"
+    run_pak(pak, cwd, "make", safe_archive, "safe.txt")
+    renamed = run_pak(pak, cwd, "rename", safe_archive, "safe.txt", "NUL", check_rc=False)
+    combined = renamed.stdout + renamed.stderr
+    check(renamed.returncode != 0, "rename should reject Windows-reserved target names")
+    check("bad archive path 'NUL'" in combined, "reserved rename diagnostic was unclear\n" + combined)
+    assert_names(pak, cwd, safe_archive, ["safe.txt"])
 
 
 def test_duplicate_archive_names_are_rejected(pak, root):
@@ -636,9 +891,18 @@ TESTS = [
     ("absolute file and directory naming", test_absolute_file_and_directory_names),
     ("missing input error", test_missing_input_error),
     ("windows reparse directory skip", test_windows_reparse_directory_is_skipped),
+    ("windows unreadable child directory skip", test_windows_unreadable_child_directory_is_skipped),
+    ("wildcard directory prefixes are preserved", test_wildcard_directory_prefixes_are_preserved),
+    ("no-match wildcard returns promptly", test_no_match_wildcard_returns_promptly),
     ("hostile names and binary stdout", test_hostile_names_and_binary_stdout),
     ("pakignore and invalid flags", test_pakignore_and_invalid_flags),
     ("extract corrupt payload preserves outputs", test_extract_corrupt_payload_preserves_outputs),
+    ("extract path conflicts are rejected before writes", test_extract_path_conflicts_are_rejected_before_writes),
+    ("rename rejects extract path conflicts", test_rename_rejects_extract_path_conflicts),
+    ("update rejects archive path conflicts", test_update_rejects_archive_path_conflicts),
+    ("make rejects archive path conflicts after sort", test_make_rejects_archive_path_conflicts_after_sort),
+    ("many files validate after scan", test_many_files_validate_after_scan),
+    ("Windows reserved archive paths are rejected", test_windows_reserved_archive_paths_are_rejected),
     ("duplicate archive names are rejected", test_duplicate_archive_names_are_rejected),
     ("repack and compression smart-skip flow", test_repack_and_compression_smart_skip),
     ("check damage report", test_check_damage_report),

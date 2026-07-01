@@ -129,10 +129,11 @@ char *io_archive_name(const char *path, int preserve_paths);
 char *io_join_path(const char *dir, const char *name);
 int io_is_plain_name(const char *name);
 int io_is_safe_path(const char *name);
+int io_is_extractable_path(const char *name);
 
 void path_list_init(struct path_list *list);
 void path_list_free(struct path_list *list);
-int path_list_add_inputs(struct path_list *list, int input_count, char **inputs, int *saw_directory);
+int path_list_add_inputs(struct path_list *list, int input_count, char **inputs, int *saw_directory, const struct pak_options *opts);
 
 void pattern_list_init(struct pak_pattern_list *list);
 void pattern_list_free(struct pak_pattern_list *list);

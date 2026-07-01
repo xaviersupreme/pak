@@ -375,6 +375,128 @@ static int check_report_drop_duplicate_names(struct check_report *report)
     return 0;
 }
 
+static char check_archive_name_sort_char(char ch)
+{
+#ifdef _WIN32
+    if (ch >= 'A' && ch <= 'Z') {
+        return (char)(ch - 'A' + 'a');
+    }
+#endif
+    return ch;
+}
+
+static int check_archive_name_is_parent_path(const char *parent, const char *child)
+{
+    size_t i;
+
+    for (i = 0; parent[i] != '\0'; i++) {
+        if (child[i] == '\0' || check_archive_name_sort_char(parent[i]) != check_archive_name_sort_char(child[i])) {
+            return 0;
+        }
+    }
+    return child[i] == '/';
+}
+
+static int check_archive_names_conflict_on_extract(const char *left, const char *right)
+{
+    return check_archive_name_is_parent_path(left, right) || check_archive_name_is_parent_path(right, left);
+}
+
+static int check_report_drop_path_conflicts(struct check_report *report)
+{
+    uint32_t kept = 0;
+    uint32_t i;
+
+    for (i = 0; i < report->entry_count; i++) {
+        struct old_entry_ref *ref = &report->entries[i];
+        const char *conflict = NULL;
+        uint32_t j;
+
+        for (j = 0; j < kept; j++) {
+            if (check_archive_names_conflict_on_extract(report->entries[j].entry.name, ref->entry.name)) {
+                conflict = report->entries[j].entry.name;
+                break;
+            }
+        }
+
+        if (conflict != NULL) {
+            uint64_t stored_size = ref->repair_mode == REPAIR_SALVAGE ? ref->entry.size : ref->entry.stored_size;
+
+            report->damaged_count++;
+            report->dropped_count++;
+            if (report->unpacked_size >= ref->entry.size) {
+                report->unpacked_size -= ref->entry.size;
+            }
+            if (report->stored_size >= stored_size) {
+                report->stored_size -= stored_size;
+            }
+            if (ref->entry.flags != 0 && report->compressed_count > 0) {
+                report->compressed_count--;
+            }
+            if (ref->repair_mode == REPAIR_SALVAGE && report->salvaged_count > 0) {
+                report->salvaged_count--;
+            }
+            if (check_report_add_issue(report, i + 1, ref->data_offset, ref->entry.name, "entry path conflicts with another entry", "drop entry") != 0) {
+                return -1;
+            }
+            free_entry(&ref->entry);
+            continue;
+        }
+
+        if (kept != i) {
+            report->entries[kept] = report->entries[i];
+            memset(&report->entries[i], 0, sizeof(report->entries[i]));
+        }
+        kept++;
+    }
+
+    report->entry_count = kept;
+    return 0;
+}
+
+static int check_report_drop_unextractable_paths(struct check_report *report)
+{
+    uint32_t kept = 0;
+    uint32_t i;
+
+    for (i = 0; i < report->entry_count; i++) {
+        struct old_entry_ref *ref = &report->entries[i];
+
+        if (!io_is_extractable_path(ref->entry.name)) {
+            uint64_t stored_size = ref->repair_mode == REPAIR_SALVAGE ? ref->entry.size : ref->entry.stored_size;
+
+            report->damaged_count++;
+            report->dropped_count++;
+            if (report->unpacked_size >= ref->entry.size) {
+                report->unpacked_size -= ref->entry.size;
+            }
+            if (report->stored_size >= stored_size) {
+                report->stored_size -= stored_size;
+            }
+            if (ref->entry.flags != 0 && report->compressed_count > 0) {
+                report->compressed_count--;
+            }
+            if (ref->repair_mode == REPAIR_SALVAGE && report->salvaged_count > 0) {
+                report->salvaged_count--;
+            }
+            if (check_report_add_issue(report, i + 1, ref->data_offset, ref->entry.name, "entry path is not valid on this platform", "drop entry") != 0) {
+                return -1;
+            }
+            free_entry(&ref->entry);
+            continue;
+        }
+
+        if (kept != i) {
+            report->entries[kept] = report->entries[i];
+            memset(&report->entries[i], 0, sizeof(report->entries[i]));
+        }
+        kept++;
+    }
+
+    report->entry_count = kept;
+    return 0;
+}
+
 static int checked_add_u64(uint64_t *value, uint64_t add)
 {
     if (UINT64_MAX - *value < add) {
@@ -1094,6 +1216,16 @@ int pak_check(const char *archive_path, const struct pak_options *opts)
         return -1;
     }
     if (check_report_drop_duplicate_names(&report) != 0) {
+        check_report_free(&report);
+        diag_error("out of memory");
+        return -1;
+    }
+    if (check_report_drop_unextractable_paths(&report) != 0) {
+        check_report_free(&report);
+        diag_error("out of memory");
+        return -1;
+    }
+    if (check_report_drop_path_conflicts(&report) != 0) {
         check_report_free(&report);
         diag_error("out of memory");
         return -1;
