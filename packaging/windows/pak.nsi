@@ -51,7 +51,7 @@ Function AddToUserPath
     SendMessage ${HWND_BROADCAST} ${WM_SETTINGCHANGE} 0 "STR:Environment" /TIMEOUT=5000
 FunctionEnd
 
-Function RemoveFromUserPath
+Function un.RemoveFromUserPath
     InitPluginsDir
     FileOpen $0 "$PLUGINSDIR\pak_path.ps1" w
     FileWrite $0 "$$dir = [IO.Path]::GetFullPath('$INSTDIR')$\r$\n"
@@ -79,7 +79,7 @@ Section "pak" SecInstall
 SectionEnd
 
 Section "Uninstall"
-    Call RemoveFromUserPath
+    Call un.RemoveFromUserPath
     Delete "$INSTDIR\pak.exe"
     Delete "$INSTDIR\uninstall.exe"
     RMDir "$INSTDIR"
