@@ -26,6 +26,17 @@ It also covers path cases that have broken before:
 * absolute file inputs
 * smart compression and `--no-smart-compress`
 
+## source install
+
+For local source installs or package scripts:
+
+```sh
+make install PREFIX=/usr/local
+make uninstall PREFIX=/usr/local
+```
+
+Package scripts can also use `DESTDIR`.
+
 ## fuzzing
 
 Quick deterministic smoke test:

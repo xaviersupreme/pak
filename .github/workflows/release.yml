@@ -24,12 +24,14 @@ jobs:
           - name: windows x64
             runner: windows-2022
             target: windows-x64
+            setup: true
             msystem: MINGW64
             packages: mingw-w64-x86_64-gcc make
             archive: zip
           - name: windows x86
             runner: windows-2022
             target: windows-x86
+            setup: true
             msystem: MINGW32
             packages: mingw-w64-i686-gcc make
             archive: zip
@@ -83,6 +85,23 @@ jobs:
         shell: pwsh
         run: Compress-Archive -Path pak.exe -DestinationPath pak-${{ matrix.target }}.zip
 
+      - name: install nsis
+        if: matrix.setup
+        shell: pwsh
+        run: choco install nsis --no-progress --yes
+
+      - name: package windows installer
+        if: matrix.setup
+        shell: pwsh
+        run: |
+          $makensis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
+          & $makensis `
+            /DPAK_EXE=pak.exe `
+            /DOUT_FILE=pak-${{ matrix.target }}-setup.exe `
+            /DPRODUCT_VERSION=${{ github.event_name == 'release' && github.event.release.tag_name || inputs.release_tag || github.ref_name }} `
+            /DARCH=${{ matrix.target }} `
+            packaging/windows/pak.nsi
+
       - name: package unix
         if: matrix.archive == 'tar.gz'
         run: tar -czf pak-${{ matrix.target }}.tar.gz pak
@@ -90,7 +109,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: pak-${{ matrix.target }}
-          path: pak-${{ matrix.target }}.${{ matrix.archive }}
+          path: pak-${{ matrix.target }}*
           if-no-files-found: error
 
   upload_release:
