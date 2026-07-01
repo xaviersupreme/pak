@@ -6,6 +6,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import zlib
 from pathlib import Path
 
 
@@ -62,6 +63,29 @@ def run_pak(pak, cwd, *args, check_rc=True):
                 code=result.returncode,
                 stdout=result.stdout,
                 stderr=result.stderr,
+            )
+        )
+    return result
+
+
+def run_pak_bytes(pak, cwd, *args, check_rc=True):
+    env = os.environ.copy()
+    env["NO_COLOR"] = "1"
+    env.pop("FORCE_COLOR", None)
+    result = subprocess.run(
+        [str(pak), *[str(arg) for arg in args]],
+        cwd=str(cwd),
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if check_rc and result.returncode != 0:
+        fail(
+            "pak {args} exited {code}\nstdout:\n{stdout}\nstderr:\n{stderr}".format(
+                args=" ".join(str(arg) for arg in args),
+                code=result.returncode,
+                stdout=result.stdout.decode(errors="replace"),
+                stderr=result.stderr.decode(errors="replace"),
             )
         )
     return result
@@ -164,6 +188,20 @@ def pak2_entries(path):
         )
         pos = data_offset + stored_size
     return data, entries
+
+
+def pak2_stored_entry(name, payload):
+    name_bytes = name.encode("utf-8")
+    if isinstance(payload, str):
+        payload = payload.encode("utf-8")
+    return struct.pack("<IIQQI", len(name_bytes), 0, len(payload), len(payload), zlib.crc32(payload) & 0xFFFFFFFF) + name_bytes + payload
+
+
+def write_pak2_archive(path, entries):
+    data = bytearray(b"PAK2" + struct.pack("<I", len(entries)))
+    for name, payload in entries:
+        data.extend(pak2_stored_entry(name, payload))
+    path.write_bytes(data)
 
 
 def make_check_archive(pak, cwd, archive_name):
@@ -301,6 +339,144 @@ def test_absolute_file_and_directory_names(pak, root):
 
     cat = run_pak(pak, cwd, "cat", archive, "loose.txt")
     check(cat.stdout == "loose absolute\n", "absolute file input was not stored by base name")
+
+
+def test_missing_input_error(pak, root):
+    cwd = root / "missing-input"
+    cwd.mkdir()
+
+    result = run_pak(pak, cwd, "make", "missing.pak", "to-remove.txt", check_rc=False)
+    combined = result.stdout + result.stderr
+    check(result.returncode != 0, "missing input should fail")
+    check("cannot pack 'to-remove.txt': not found" in combined, "missing input error was unclear\n" + combined)
+
+
+def test_windows_reparse_directory_is_skipped(pak, root):
+    if os.name != "nt":
+        return
+
+    cwd = root / "windows-reparse"
+    cwd.mkdir()
+    write_text(cwd / "real" / "inside.txt", "inside\n")
+    write_text(cwd / "loose.txt", "loose\n")
+
+    link = cwd / "link"
+    created = subprocess.run(
+        ["cmd", "/c", "mklink", "/J", str(link), str(cwd / "real")],
+        cwd=str(cwd),
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if created.returncode != 0:
+        return
+
+    archive = cwd / "dot.pak"
+    run_pak(pak, cwd, "make", "--paths", archive, ".")
+    names = set(list_names(pak, cwd, archive))
+    check("loose.txt" in names, "normal file was not packed")
+    check("real/inside.txt" in names, "real directory was not packed")
+    check("link/inside.txt" not in names, "reparse directory was followed")
+
+
+def test_hostile_names_and_binary_stdout(pak, root):
+    cwd = root / "hostile-names"
+    cwd.mkdir()
+    binary = b"\x00\x01pak\xff\r\n"
+    write_bytes(cwd / "empty.bin", b"")
+    write_text(cwd / "space name.txt", "space\n")
+    write_text(cwd / "-dash.txt", "dash\n")
+    write_bytes(cwd / "binary.bin", binary)
+
+    run_pak(pak, cwd, "make", "names", "--", "empty.bin", "space name.txt", "-dash.txt", "binary.bin")
+    archive = cwd / "names.pak"
+    check(archive.exists(), "make should append .pak for hostile name case")
+    assert_names(pak, cwd, archive, ["-dash.txt", "binary.bin", "empty.bin", "space name.txt"])
+
+    dash = run_pak(pak, cwd, "cat", archive, "--", "-dash.txt")
+    check(dash.stdout == "dash\n", "cat could not read leading-dash entry")
+    empty = run_pak_bytes(pak, cwd, "cat", archive, "empty.bin")
+    check(empty.stdout == b"", "cat changed empty file output")
+    cat = run_pak_bytes(pak, cwd, "cat", archive, "binary.bin")
+    check(cat.stdout == binary, "cat did not preserve binary stdout bytes")
+
+
+def test_pakignore_and_invalid_flags(pak, root):
+    cwd = root / "pakignore"
+    cwd.mkdir()
+    write_text(cwd / ".pakignore", "*.tmp\nignored/\n")
+    write_text(cwd / "assets" / "keep.txt", "keep\n")
+    write_text(cwd / "assets" / "skip.tmp", "skip\n")
+    write_text(cwd / "assets" / "ignored" / "hidden.txt", "hidden\n")
+
+    archive = cwd / "ignored.pak"
+    run_pak(pak, cwd, "make", "--paths", archive, "assets")
+    assert_names(pak, cwd, archive, ["keep.txt"])
+
+    all_archive = cwd / "all.pak"
+    run_pak(pak, cwd, "make", "--paths", "--no-pakignore", all_archive, "assets")
+    assert_names(pak, cwd, all_archive, ["ignored/hidden.txt", "keep.txt", "skip.tmp"])
+
+    bad = run_pak(pak, cwd, "list", "--overwrite", archive, check_rc=False)
+    combined = bad.stdout + bad.stderr
+    check(bad.returncode != 0, "list should reject extract-only flag")
+    check("list: option '--overwrite' does not apply" in combined, "invalid flag diagnostic was unclear\n" + combined)
+
+
+def test_extract_corrupt_payload_preserves_outputs(pak, root):
+    cwd = root / "corrupt-extract"
+    cwd.mkdir()
+    write_text(cwd / "a.txt", "good\n")
+    archive = cwd / "good.pak"
+    run_pak(pak, cwd, "make", archive, "a.txt")
+
+    data, entries = pak2_entries(archive)
+    check(entries[0]["stored_size"] > 0, "test payload should not be empty")
+    data[entries[0]["data_offset"]] ^= 0x55
+    bad_archive = cwd / "bad.pak"
+    bad_archive.write_bytes(data)
+
+    existing = cwd / "existing"
+    write_text(existing / "a.txt", "keep\n")
+    result = run_pak(pak, cwd, "unpack", "--overwrite", bad_archive, "-C", existing, check_rc=False)
+    combined = result.stdout + result.stderr
+    check(result.returncode != 0, "corrupt extract should fail")
+    check("checksum mismatch for 'a.txt'" in combined, "corrupt extract did not report checksum mismatch\n" + combined)
+    check((existing / "a.txt").read_text(encoding="utf-8") == "keep\n", "corrupt extract overwrote existing output")
+    check(not list(existing.glob("*.tmp*")), "corrupt extract left a temp file")
+
+    fresh = cwd / "fresh"
+    fresh.mkdir()
+    result = run_pak(pak, cwd, "unpack", bad_archive, "-C", fresh, check_rc=False)
+    check(result.returncode != 0, "corrupt extract to fresh directory should fail")
+    check(not (fresh / "a.txt").exists(), "corrupt extract left a new bad output file")
+    check(not list(fresh.glob("*.tmp*")), "corrupt fresh extract left a temp file")
+
+
+def test_duplicate_archive_names_are_rejected(pak, root):
+    cwd = root / "duplicate-names"
+    cwd.mkdir()
+    archive = cwd / "duplicate.pak"
+    write_pak2_archive(archive, [("x.txt", "one\n"), ("x.txt", "two\n")])
+
+    listed = run_pak(pak, cwd, "list", archive, check_rc=False)
+    combined = listed.stdout + listed.stderr
+    check(listed.returncode != 0, "list should reject duplicate archive names")
+    check("duplicate archive name 'x.txt'" in combined, "list duplicate diagnostic was unclear\n" + combined)
+
+    out = cwd / "out"
+    out.mkdir()
+    unpacked = run_pak(pak, cwd, "unpack", archive, "-C", out, check_rc=False)
+    combined = unpacked.stdout + unpacked.stderr
+    check(unpacked.returncode != 0, "unpack should reject duplicate archive names")
+    check("duplicate archive name 'x.txt'" in combined, "unpack duplicate diagnostic was unclear\n" + combined)
+    check(not (out / "x.txt").exists(), "duplicate archive preflight still wrote output")
+
+    checked = run_pak(pak, cwd, "check", archive, check_rc=False)
+    combined = checked.stdout + checked.stderr
+    check(checked.returncode != 0, "check should report duplicate archive names as damage")
+    check("duplicate entry name" in combined, "check did not report duplicate entry name\n" + combined)
+    check("repair plan" in checked.stdout, "check did not offer a duplicate-name repair plan\n" + combined)
 
 
 def test_repack_and_compression_smart_skip(pak, root):
@@ -454,6 +630,12 @@ TESTS = [
     ("core command flow", test_core_command_flow),
     ("directory, wildcard, mixed input flow", test_directory_wildcards_and_mixed_inputs),
     ("absolute file and directory naming", test_absolute_file_and_directory_names),
+    ("missing input error", test_missing_input_error),
+    ("windows reparse directory skip", test_windows_reparse_directory_is_skipped),
+    ("hostile names and binary stdout", test_hostile_names_and_binary_stdout),
+    ("pakignore and invalid flags", test_pakignore_and_invalid_flags),
+    ("extract corrupt payload preserves outputs", test_extract_corrupt_payload_preserves_outputs),
+    ("duplicate archive names are rejected", test_duplicate_archive_names_are_rejected),
     ("repack and compression smart-skip flow", test_repack_and_compression_smart_skip),
     ("check damage report", test_check_damage_report),
     ("check corruption cases", test_check_corruption_cases),

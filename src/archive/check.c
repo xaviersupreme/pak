@@ -323,6 +323,58 @@ static void check_report_free(struct check_report *report)
     memset(report, 0, sizeof(*report));
 }
 
+static int check_report_drop_duplicate_names(struct check_report *report)
+{
+    uint32_t kept = 0;
+    uint32_t i;
+
+    for (i = 0; i < report->entry_count; i++) {
+        struct old_entry_ref *ref = &report->entries[i];
+        int duplicate = 0;
+        uint32_t j;
+
+        for (j = 0; j < kept; j++) {
+            if (same_archive_name(report->entries[j].entry.name, ref->entry.name)) {
+                duplicate = 1;
+                break;
+            }
+        }
+
+        if (duplicate) {
+            uint64_t stored_size = ref->repair_mode == REPAIR_SALVAGE ? ref->entry.size : ref->entry.stored_size;
+
+            report->damaged_count++;
+            report->dropped_count++;
+            if (report->unpacked_size >= ref->entry.size) {
+                report->unpacked_size -= ref->entry.size;
+            }
+            if (report->stored_size >= stored_size) {
+                report->stored_size -= stored_size;
+            }
+            if (ref->entry.flags != 0 && report->compressed_count > 0) {
+                report->compressed_count--;
+            }
+            if (ref->repair_mode == REPAIR_SALVAGE && report->salvaged_count > 0) {
+                report->salvaged_count--;
+            }
+            if (check_report_add_issue(report, i + 1, ref->data_offset, ref->entry.name, "duplicate entry name", "drop entry") != 0) {
+                return -1;
+            }
+            free_entry(&ref->entry);
+            continue;
+        }
+
+        if (kept != i) {
+            report->entries[kept] = report->entries[i];
+            memset(&report->entries[i], 0, sizeof(report->entries[i]));
+        }
+        kept++;
+    }
+
+    report->entry_count = kept;
+    return 0;
+}
+
 static int checked_add_u64(uint64_t *value, uint64_t add)
 {
     if (UINT64_MAX - *value < add) {
@@ -1039,6 +1091,11 @@ int pak_check(const char *archive_path, const struct pak_options *opts)
 
     if (check_archive_collect(archive_path, opts, &report) != 0) {
         check_report_free(&report);
+        return -1;
+    }
+    if (check_report_drop_duplicate_names(&report) != 0) {
+        check_report_free(&report);
+        diag_error("out of memory");
         return -1;
     }
     if (report.damaged_count == 0) {

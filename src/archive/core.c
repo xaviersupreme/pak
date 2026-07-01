@@ -35,6 +35,7 @@
 #define COMPRESS_MEDIUM_MIN_GAIN 5u
 #define COMPRESS_LARGE_MIN_GAIN 8u
 #define COMPRESS_HUGE_MIN_GAIN 10u
+#define EXTRACT_TEMP_ATTEMPTS 1000u
 
 static int read_exact(FILE *fp, void *buf, size_t size)
 {
@@ -1090,11 +1091,20 @@ static int read_archive_entries(FILE *archive, const char *archive_path, struct 
     for (i = 0; i < count; i++) {
         struct pak_entry entry;
         uint64_t data_offset;
+        uint32_t j;
 
         if (read_entry_header(archive, version, &entry) != 0) {
             diag_error("damaged entry in '%s'", archive_path);
             free_old_entry_refs(entries, i);
             return -1;
+        }
+        for (j = 0; j < i; j++) {
+            if (same_archive_name(entries[j].entry.name, entry.name)) {
+                diag_error("duplicate archive name '%s' in '%s'", entry.name, archive_path);
+                free_entry(&entry);
+                free_old_entry_refs(entries, i);
+                return -1;
+            }
         }
 
         if (pak_file_tell(archive, &data_offset) != 0) {
@@ -1162,6 +1172,32 @@ static char *make_temp_archive_path(const char *archive_path)
     }
     snprintf(out, len + 5, "%s.tmp", archive_path);
     return out;
+}
+
+static char *make_extract_temp_path(const char *out_path)
+{
+    size_t len = strlen(out_path);
+    unsigned int attempt;
+
+    for (attempt = 0; attempt < EXTRACT_TEMP_ATTEMPTS; attempt++) {
+        char *out = malloc(len + 16);
+
+        if (out == NULL) {
+            return NULL;
+        }
+        if (attempt == 0) {
+            snprintf(out, len + 16, "%s.tmp", out_path);
+        } else {
+            snprintf(out, len + 16, "%s.tmp.%u", out_path, attempt);
+        }
+        if (!io_file_exists(out)) {
+            return out;
+        }
+        free(out);
+    }
+
+    errno = EEXIST;
+    return NULL;
 }
 
 static int replace_archive_file(const char *tmp_path, const char *archive_path)
@@ -1763,9 +1799,17 @@ int pak_list(const char *archive_path, int selected_count, char **selected_names
 
     name_width = 4;
     for (i = 0; i < count; i++) {
+        uint32_t j;
+
         if (read_entry_header(archive, version, &entries[i]) != 0) {
             diag_error("damaged entry in '%s'", archive_path);
             goto fail;
+        }
+        for (j = 0; j < i; j++) {
+            if (same_archive_name(entries[j].name, entries[i].name)) {
+                diag_error("duplicate archive name '%s' in '%s'", entries[i].name, archive_path);
+                goto fail;
+            }
         }
 
         selected = entry_is_selected(entries[i].name, selected_count, selected_names);
@@ -2552,6 +2596,7 @@ done:
 int pak_extract(const char *archive_path, int selected_count, char **selected_names, const struct pak_options *opts)
 {
     FILE *archive;
+    struct old_entry_ref *preflight_entries;
     int *seen;
     uint32_t count;
     uint32_t i;
@@ -2571,7 +2616,14 @@ int pak_extract(const char *archive_path, int selected_count, char **selected_na
         return -1;
     }
 
-    if (read_archive_header(archive, &version, &count) != 0) {
+    preflight_entries = NULL;
+    if (read_archive_entries(archive, archive_path, &preflight_entries, &count, &version) != 0) {
+        fclose(archive);
+        free(seen);
+        return -1;
+    }
+    free_old_entry_refs(preflight_entries, count);
+    if (pak_file_seek(archive, 8) != 0) {
         diag_error("bad archive '%s'", archive_path);
         fclose(archive);
         free(seen);
@@ -2586,6 +2638,7 @@ int pak_extract(const char *archive_path, int selected_count, char **selected_na
     for (i = 0; i < count; i++) {
         struct pak_entry entry;
         char *out_path;
+        char *tmp_path;
         FILE *out;
 
         if (read_entry_header(archive, version, &entry) != 0) {
@@ -2651,10 +2704,21 @@ int pak_extract(const char *archive_path, int selected_count, char **selected_na
             return -1;
         }
 
+        tmp_path = make_extract_temp_path(out_path);
+        if (tmp_path == NULL) {
+            diag_error("cannot create temporary output for '%s': %s", out_path, strerror(errno));
+            free(out_path);
+            free_entry(&entry);
+            fclose(archive);
+            free(seen);
+            return -1;
+        }
+
         log_item(opts, (int)i + 1, (int)count, "extract %s", entry.name);
-        out = fopen(out_path, "wb");
+        out = fopen(tmp_path, "wb");
         if (out == NULL) {
-            diag_error("%s: %s", out_path, strerror(errno));
+            diag_error("%s: %s", tmp_path, strerror(errno));
+            free(tmp_path);
             free(out_path);
             free_entry(&entry);
             fclose(archive);
@@ -2665,6 +2729,8 @@ int pak_extract(const char *archive_path, int selected_count, char **selected_na
         if (process_entry_data(archive, out, &entry, version, opts, 1) != 0) {
             diag_error("failed while extracting '%s'", entry.name);
             fclose(out);
+            remove(tmp_path);
+            free(tmp_path);
             free(out_path);
             free_entry(&entry);
             fclose(archive);
@@ -2672,7 +2738,37 @@ int pak_extract(const char *archive_path, int selected_count, char **selected_na
             return -1;
         }
 
-        fclose(out);
+        if (fclose(out) != 0) {
+            diag_error("failed to finish '%s'", tmp_path);
+            remove(tmp_path);
+            free(tmp_path);
+            free(out_path);
+            free_entry(&entry);
+            fclose(archive);
+            free(seen);
+            return -1;
+        }
+        if (opts->overwrite_mode != PAK_OVERWRITE_REPLACE && io_file_exists(out_path)) {
+            diag_error("refusing to overwrite '%s'", out_path);
+            remove(tmp_path);
+            free(tmp_path);
+            free(out_path);
+            free_entry(&entry);
+            fclose(archive);
+            free(seen);
+            return -1;
+        }
+        if (replace_archive_file(tmp_path, out_path) != 0) {
+            diag_error("failed to replace '%s': %s", out_path, strerror(errno));
+            remove(tmp_path);
+            free(tmp_path);
+            free(out_path);
+            free_entry(&entry);
+            fclose(archive);
+            free(seen);
+            return -1;
+        }
+        free(tmp_path);
         free(out_path);
         free_entry(&entry);
     }

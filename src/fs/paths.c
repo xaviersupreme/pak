@@ -64,6 +64,26 @@ static const char *relative_scan_name(const char *path, size_t root_len)
 }
 
 #ifdef _WIN32
+static int errno_from_win32_error(DWORD error)
+{
+    switch (error) {
+    case ERROR_ACCESS_DENIED:
+        return EACCES;
+    case ERROR_FILE_NOT_FOUND:
+    case ERROR_PATH_NOT_FOUND:
+        return ENOENT;
+    case ERROR_INVALID_NAME:
+        return EINVAL;
+    default:
+        return EINVAL;
+    }
+}
+
+static int file_attributes_are_reparse_directory(DWORD attrs)
+{
+    return (attrs & FILE_ATTRIBUTE_DIRECTORY) != 0 && (attrs & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
+}
+
 static char *copy_path_part(const char *path, size_t len)
 {
     char *out = malloc(len + 1);
@@ -115,9 +135,11 @@ static int input_has_recursive_wildcard(const char *input)
 static int path_is_directory(const char *path)
 {
 #ifdef _WIN32
-    struct _stat64 st;
+    DWORD attrs = GetFileAttributesA(path);
 
-    return _stat64(path, &st) == 0 && (st.st_mode & _S_IFDIR) != 0;
+    return attrs != INVALID_FILE_ATTRIBUTES &&
+        (attrs & FILE_ATTRIBUTE_DIRECTORY) != 0 &&
+        (attrs & FILE_ATTRIBUTE_REPARSE_POINT) == 0;
 #else
     struct stat st;
 
@@ -130,6 +152,19 @@ static int path_is_file(const char *path)
     uint64_t size;
 
     return io_file_size(path, &size) == 0;
+}
+
+static int path_exists_for_input(const char *path)
+{
+#ifdef _WIN32
+    struct _stat64 st;
+
+    return _stat64(path, &st) == 0;
+#else
+    struct stat st;
+
+    return stat(path, &st) == 0;
+#endif
 }
 
 void path_list_init(struct path_list *list)
@@ -245,6 +280,7 @@ static int collect_directory(struct path_list *list, const char *dir, size_t roo
     find = FindFirstFileA(pattern, &data);
     free(pattern);
     if (find == INVALID_HANDLE_VALUE) {
+        errno = errno_from_win32_error(GetLastError());
         return -1;
     }
 
@@ -258,6 +294,10 @@ static int collect_directory(struct path_list *list, const char *dir, size_t roo
         if (child == NULL) {
             FindClose(find);
             return -1;
+        }
+        if (file_attributes_are_reparse_directory(data.dwFileAttributes)) {
+            free(child);
+            continue;
         }
         if ((data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
             if (collect_directory(list, child, root_len) != 0) {
@@ -331,6 +371,7 @@ static int collect_matching_files(struct path_list *list, const char *dir, const
     find = FindFirstFileA(scan, &data);
     free(scan);
     if (find == INVALID_HANDLE_VALUE) {
+        errno = errno_from_win32_error(GetLastError());
         return -1;
     }
 
@@ -344,6 +385,10 @@ static int collect_matching_files(struct path_list *list, const char *dir, const
         if (child == NULL) {
             FindClose(find);
             return -1;
+        }
+        if (file_attributes_are_reparse_directory(data.dwFileAttributes)) {
+            free(child);
+            continue;
         }
         if ((data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
             if (collect_matching_files(list, child, pattern, matched) != 0) {
@@ -493,6 +538,10 @@ static int add_wildcard_input(struct path_list *list, const char *input, int *sa
             free(dir);
             return -1;
         }
+        if (file_attributes_are_reparse_directory(data.dwFileAttributes)) {
+            free(path);
+            continue;
+        }
         if ((data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
             *saw_directory = 1;
             if (collect_directory(list, path, scan_root_len(path)) != 0) {
@@ -594,6 +643,9 @@ int path_list_add_inputs(struct path_list *list, int input_count, char **inputs,
                 diag_error("out of memory");
                 return -1;
             }
+        } else if (!path_exists_for_input(inputs[i])) {
+            diag_error("cannot pack '%s': not found", inputs[i]);
+            return -1;
         } else {
             diag_error("cannot pack '%s': not a regular file or directory", inputs[i]);
             return -1;
