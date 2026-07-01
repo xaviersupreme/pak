@@ -14,6 +14,44 @@ Use it for asset packs, tools, configs, test fixtures, and simple project data.
 </p>
 
 
+## install
+
+Windows:
+
+```powershell
+powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/xaviersupreme/pak/master/scripts/install.ps1 | iex"
+```
+
+Windows setup exe:
+
+```powershell
+powershell -ExecutionPolicy Bypass -Command "$s = Join-Path $env:TEMP 'pak-install.ps1'; Invoke-RestMethod https://raw.githubusercontent.com/xaviersupreme/pak/master/scripts/install.ps1 -OutFile $s; & $s -Setup"
+```
+
+Linux/macOS:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/xaviersupreme/pak/master/scripts/install.sh | sh
+```
+
+Specific version:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/xaviersupreme/pak/master/scripts/install.sh | PAK_VERSION=v0.3.1 sh
+```
+
+<!-- Package managers are not published yet.
+
+```sh
+# not available yet
+winget install xaviersupreme.pak
+choco install pak
+apt install pak
+dnf install pak
+brew install pak
+```
+-->
+
 ## build
 
 ```sh
@@ -27,10 +65,6 @@ Windows fallback w/o make:
 ```
 
 Development notes are in [docs/development.md](docs/development.md).
-
-## releases
-
-Builds are on the GitHub Releases page. Windows users can use the setup exe. `SHA256SUMS` is attached for checking downloads.
 
 ## quick start
 
