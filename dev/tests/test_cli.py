@@ -680,6 +680,72 @@ def test_many_files_validate_after_scan(pak, root):
     check("pack {0} files".format(count) in combined, "many-file archive did not reach packing\n" + combined)
 
 
+def test_make_is_atomic_on_pack_failure(pak, root):
+    cwd = root / "make-atomic-failure"
+    cwd.mkdir()
+    write_text(cwd / "old.txt", "old archive\n")
+    archive = cwd / "atomic.pak"
+    run_pak(pak, cwd, "make", archive, "old.txt")
+    old_archive = archive.read_bytes()
+
+    write_text(cwd / "a-good.txt", "new good\n")
+    bad = cwd / "z-bad.txt"
+    write_text(bad, "new bad\n")
+
+    release_bad = None
+    if os.name == "nt":
+        import ctypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CreateFileW.argtypes = [
+            ctypes.c_wchar_p,
+            ctypes.c_uint32,
+            ctypes.c_uint32,
+            ctypes.c_void_p,
+            ctypes.c_uint32,
+            ctypes.c_uint32,
+            ctypes.c_void_p,
+        ]
+        kernel32.CreateFileW.restype = ctypes.c_void_p
+        kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+        handle = kernel32.CreateFileW(str(bad), 0x80000000, 0, None, 3, 0, None)
+        if handle == ctypes.c_void_p(-1).value:
+            return
+        release_bad = lambda: kernel32.CloseHandle(handle)
+    else:
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
+            return
+        bad.chmod(0)
+        release_bad = lambda: bad.chmod(0o666)
+
+    try:
+        result = run_pak(pak, cwd, "make", archive, "a-good.txt", "z-bad.txt", check_rc=False)
+        combined = result.stdout + result.stderr
+        check(result.returncode != 0, "locked input should make pak fail")
+        check("z-bad.txt" in combined, "pack failure did not name the bad input\n" + combined)
+        check(archive.read_bytes() == old_archive, "failed make changed the existing archive")
+        check(not (cwd / "atomic.pak.tmp").exists(), "failed make left a temp archive")
+
+        new_archive = cwd / "new.pak"
+        result = run_pak(pak, cwd, "make", new_archive, "a-good.txt", "z-bad.txt", check_rc=False)
+        combined = result.stdout + result.stderr
+        check(result.returncode != 0, "locked input should make new archive fail")
+        check(not new_archive.exists(), "failed make created a partial new archive")
+        check(not (cwd / "new.pak.tmp").exists(), "failed new make left a temp archive")
+    finally:
+        release_bad()
+
+
+def test_make_skips_stale_temp_archive(pak, root):
+    cwd = root / "make-skip-temp"
+    cwd.mkdir()
+    write_text(cwd / "keep.txt", "keep\n")
+    write_text(cwd / "self.pak.tmp", "stale temp\n")
+
+    run_pak(pak, cwd, "make", "self.pak", ".")
+    assert_names(pak, cwd, cwd / "self.pak", ["keep.txt"])
+
+
 def test_windows_reserved_archive_paths_are_rejected(pak, root):
     if os.name != "nt":
         return
@@ -902,6 +968,8 @@ TESTS = [
     ("update rejects archive path conflicts", test_update_rejects_archive_path_conflicts),
     ("make rejects archive path conflicts after sort", test_make_rejects_archive_path_conflicts_after_sort),
     ("many files validate after scan", test_many_files_validate_after_scan),
+    ("make is atomic on pack failure", test_make_is_atomic_on_pack_failure),
+    ("make skips stale temp archive", test_make_skips_stale_temp_archive),
     ("Windows reserved archive paths are rejected", test_windows_reserved_archive_paths_are_rejected),
     ("duplicate archive names are rejected", test_duplicate_archive_names_are_rejected),
     ("repack and compression smart-skip flow", test_repack_and_compression_smart_skip),

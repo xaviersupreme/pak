@@ -506,6 +506,7 @@ struct make_input {
     char *name;
 };
 
+static char *make_temp_archive_path(const char *archive_path);
 static int validate_extract_paths(struct old_entry_ref *entries, uint32_t count, int selected_count, char **selected_names);
 
 static const char *closest_entry_name(struct old_entry_ref *entries, uint32_t count, const char *query)
@@ -751,14 +752,21 @@ static char *archive_string_copy(const char *value)
 static int build_make_inputs(const char *archive_path, int file_count, char **file_paths, char **archive_names, const struct pak_options *opts, struct make_input **out_inputs, int *out_count)
 {
     struct make_input *inputs;
+    char *tmp_path;
     int count;
     int i;
 
     *out_inputs = NULL;
     *out_count = 0;
+    tmp_path = make_temp_archive_path(archive_path);
+    if (tmp_path == NULL) {
+        diag_error("out of memory");
+        return -1;
+    }
     inputs = calloc(file_count == 0 ? 1 : (size_t)file_count, sizeof(*inputs));
     if (inputs == NULL) {
         diag_error("out of memory");
+        free(tmp_path);
         return -1;
     }
 
@@ -766,7 +774,7 @@ static int build_make_inputs(const char *archive_path, int file_count, char **fi
     for (i = 0; i < file_count; i++) {
         char *name;
 
-        if (same_input_path(file_paths[i], archive_path)) {
+        if (same_input_path(file_paths[i], archive_path) || same_input_path(file_paths[i], tmp_path)) {
             log_step(opts, "skip output archive %s", file_paths[i]);
             continue;
         }
@@ -774,6 +782,7 @@ static int build_make_inputs(const char *archive_path, int file_count, char **fi
         name = archive_names != NULL && archive_names[i] != NULL ? io_archive_name(archive_names[i], 1) : io_archive_name(file_paths[i], opts->preserve_paths);
         if (name == NULL) {
             diag_error("bad archive path '%s'", file_paths[i]);
+            free(tmp_path);
             free_make_inputs(inputs, count);
             return -1;
         }
@@ -794,17 +803,20 @@ static int build_make_inputs(const char *archive_path, int file_count, char **fi
         for (i = 1; i < count; i++) {
             if (same_archive_name(inputs[i - 1].name, inputs[i].name)) {
                 diag_error("duplicate archive name '%s'", inputs[i].name);
+                free(tmp_path);
                 free_make_inputs(inputs, count);
                 return -1;
             }
             if (archive_names_conflict_as_paths(inputs[i - 1].name, inputs[i].name)) {
                 report_archive_path_conflict(inputs[i - 1].name, inputs[i].name);
+                free(tmp_path);
                 free_make_inputs(inputs, count);
                 return -1;
             }
         }
     }
 
+    free(tmp_path);
     *out_inputs = inputs;
     *out_count = count;
     return 0;
@@ -1373,8 +1385,10 @@ int pak_make(const char *archive_path, int file_count, char **file_paths, char *
 {
     FILE *archive;
     struct make_input *inputs;
+    char *tmp_path;
     int input_count;
     int i;
+    int rc;
 
     if (file_count <= 0) {
         diag_error("no input files");
@@ -1390,39 +1404,60 @@ int pak_make(const char *archive_path, int file_count, char **file_paths, char *
         return -1;
     }
 
-    log_step(opts, "create %s", archive_path);
-    archive = fopen(archive_path, "wb");
-    if (archive == NULL) {
-        diag_error("%s: %s", archive_path, strerror(errno));
+    tmp_path = make_temp_archive_path(archive_path);
+    if (tmp_path == NULL) {
+        diag_error("out of memory");
         free_make_inputs(inputs, input_count);
         return -1;
     }
 
-    if (write_archive_header(archive, (uint32_t)input_count) != 0) {
-        diag_error("failed to write archive header");
-        fclose(archive);
+    log_step(opts, "create %s", archive_path);
+    archive = fopen(tmp_path, "wb");
+    if (archive == NULL) {
+        diag_error("%s: %s", tmp_path, strerror(errno));
+        free(tmp_path);
         free_make_inputs(inputs, input_count);
         return -1;
+    }
+
+    rc = -1;
+    if (write_archive_header(archive, (uint32_t)input_count) != 0) {
+        diag_error("failed to write archive header");
+        goto done;
     }
 
     log_step(opts, "pack %d file%s", input_count, input_count == 1 ? "" : "s");
     for (i = 0; i < input_count; i++) {
         if (pack_file_entry(archive, &inputs[i], i + 1, input_count, opts) != 0) {
-            fclose(archive);
-            free_make_inputs(inputs, input_count);
-            return -1;
+            goto done;
         }
     }
 
     if (fclose(archive) != 0) {
-        diag_error("failed to finish %s", archive_path);
-        free_make_inputs(inputs, input_count);
-        return -1;
+        archive = NULL;
+        diag_error("failed to finish %s", tmp_path);
+        goto done;
+    }
+    archive = NULL;
+
+    if (replace_archive_file(tmp_path, archive_path) != 0) {
+        diag_error("failed to replace %s: %s", archive_path, strerror(errno));
+        goto done;
     }
 
     log_step(opts, "done");
+    rc = 0;
+
+done:
+    if (archive != NULL) {
+        fclose(archive);
+    }
+    if (rc != 0) {
+        remove(tmp_path);
+    }
+    free(tmp_path);
     free_make_inputs(inputs, input_count);
-    return 0;
+    return rc;
 }
 
 int pak_update(const char *archive_path, int file_count, char **file_paths, char **archive_names, const struct pak_options *opts)
