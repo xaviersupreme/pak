@@ -608,14 +608,77 @@ static char *clean_path_copy(const char *path)
     return out;
 }
 
+#ifndef _WIN32
+static const char *skip_current_dir_prefixes(const char *path)
+{
+    while (path[0] == '.' && path[1] == '/') {
+        path += 2;
+    }
+    return path;
+}
+#endif
+
+static char *absolute_input_path_copy(const char *path)
+{
+#ifdef _WIN32
+    DWORD needed;
+    DWORD length;
+    char *full;
+    char *clean;
+
+    needed = GetFullPathNameA(path, 0, NULL, NULL);
+    if (needed == 0) {
+        return NULL;
+    }
+    full = malloc((size_t)needed + 1);
+    if (full == NULL) {
+        return NULL;
+    }
+    length = GetFullPathNameA(path, needed + 1, full, NULL);
+    if (length == 0 || length > needed) {
+        free(full);
+        return NULL;
+    }
+    clean = clean_path_copy(full);
+    free(full);
+    return clean;
+#else
+    char cwd[PATH_MAX];
+    char *joined;
+    char *clean;
+    size_t cwd_len;
+    size_t path_len;
+
+    path = skip_current_dir_prefixes(path);
+    if (path[0] == '/') {
+        return clean_path_copy(path);
+    }
+    if (getcwd(cwd, sizeof(cwd)) == NULL) {
+        return NULL;
+    }
+    cwd_len = strlen(cwd);
+    path_len = strlen(path);
+    joined = malloc(cwd_len + 1 + path_len + 1);
+    if (joined == NULL) {
+        return NULL;
+    }
+    memcpy(joined, cwd, cwd_len);
+    joined[cwd_len] = '/';
+    memcpy(joined + cwd_len + 1, path, path_len + 1);
+    clean = clean_path_copy(joined);
+    free(joined);
+    return clean;
+#endif
+}
+
 static int same_input_path(const char *left, const char *right)
 {
     char *a;
     char *b;
     int same;
 
-    a = clean_path_copy(left);
-    b = clean_path_copy(right);
+    a = absolute_input_path_copy(left);
+    b = absolute_input_path_copy(right);
     if (a == NULL || b == NULL) {
         free(a);
         free(b);

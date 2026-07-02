@@ -376,6 +376,14 @@ def test_absolute_file_and_directory_names(pak, root):
 
     cat = run_pak(pak, cwd, "cat", archive, "loose.txt")
     check(cat.stdout == "loose absolute\n", "absolute file input was not stored by base name")
+    archive.unlink()
+
+    dot_archive = cwd / "dot-absolute.pak"
+    run_pak(pak, cwd, "make", dot_archive, "loose.txt")
+    write_text(cwd / "new.txt", "new\n")
+    write_text(cwd / "dot-absolute.pak.tmp", "stale temp\n")
+    run_pak(pak, cwd, "make", "--paths", dot_archive, ".")
+    assert_names(pak, cwd, dot_archive, ["assets/config.txt", "loose.txt", "new.txt"])
 
 
 def test_missing_input_error(pak, root):
